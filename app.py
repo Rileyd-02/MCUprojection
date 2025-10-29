@@ -1,61 +1,71 @@
 import streamlit as st
-import os
 import importlib
+import pkgutil
+import brands
+import time
+import os
+from pathlib import Path
 
-# ----------------------------
-# Dynamic brand detection
-# ----------------------------
-BRANDS_DIR = "brands"
+# -----------------------------
+# Function to dynamically load brand modules
+# -----------------------------
+@st.cache_resource(ttl=10)  # refresh every 10 seconds
+def load_brand_modules():
+    """Auto-detect and import brand modules dynamically from the /brands folder."""
+    modules = {}
+    for _, name, _ in pkgutil.iter_modules(brands.__path__):
+        try:
+            mod = importlib.import_module(f"brands.{name}")
+            if hasattr(mod, "render") and hasattr(mod, "name"):
+                modules[name] = mod
+        except Exception as e:
+            st.warning(f"⚠️ Failed to load brand module '{name}': {e}")
+    return modules
 
-def discover_brands():
-    """
-    Discover all Python modules in the brands folder with a `run_page` function.
-    Returns a list of tuples: (brand_name, run_page_function)
-    """
-    brands_modules = []
+# -----------------------------
+# Auto-refresh trigger (check folder timestamp)
+# -----------------------------
+def folder_last_modified(folder: Path):
+    """Return latest modification timestamp of a folder."""
+    return max(os.path.getmtime(p) for p in folder.rglob("*.py"))
 
-    for file in os.listdir(BRANDS_DIR):
-        if file.endswith(".py") and file != "__init__.py":
-            module_name = file[:-3]
-            try:
-                module = importlib.import_module(f"{BRANDS_DIR}.{module_name}")
-                if hasattr(module, "run_page"):
-                    brands_modules.append((module_name, module.run_page))
-            except Exception as e:
-                st.warning(f"Failed to load brand module '{module_name}': {e}")
-    # Sort alphabetically
-    brands_modules.sort(key=lambda x: x[0])
-    return brands_modules
+# Track folder changes for auto-refresh
+brands_path = Path(brands.__path__[0])
+last_refresh_time = st.session_state.get("last_refresh_time", 0)
+current_mod_time = folder_last_modified(brands_path)
 
-brands_modules = discover_brands()
+if current_mod_time > last_refresh_time:
+    st.cache_resource.clear()
+    st.session_state["last_refresh_time"] = current_mod_time
 
-# ----------------------------
-# Home page
-# ----------------------------
-def page_home():
-    st.title("📦 MCU / PLM Tools Dashboard")
-    st.markdown("""
-    **Quick guide**
-    - Upload the buy/plm files for your brand.
-    - Each brand has its own workflow.
-    - VSPINK preserves metadata + month pivoting.
-    - New brands are auto-detected and appear in the sidebar.
-    """)
+# -----------------------------
+# Load brand modules dynamically
+# -----------------------------
+brand_modules = load_brand_modules()
 
-# ----------------------------
-# Sidebar navigation
-# ----------------------------
-pages = ["Home"] + [name.capitalize() for name, _ in brands_modules]
-page_choice = st.sidebar.radio("Select page", pages)
+# -----------------------------
+# Sidebar Navigation
+# -----------------------------
+st.sidebar.title("Accounts")
+pages = ["🏠 Home"] + [mod.name for mod in brand_modules.values()]
+choice = st.sidebar.radio("Choose page", pages)
 
-# ----------------------------
-# Run selected page
-# ----------------------------
-if page_choice == "Home":
-    page_home()
+# -----------------------------
+# Main Page Rendering
+# -----------------------------
+if choice == "🏠 Home":
+    st.title("📦 MCU Projection Tool")
+    st.markdown(
+        """
+        Welcome to the **MCU Projection Tool** 👋  
+        Use the sidebar to select a brand account.  
+        You can use the same brand accounts which uses the same logic. 
+        """
+    )
+    st.info("🔄 New brand modules in `/brands/` will appear automatically — no restart needed!")
 else:
-    # Map sidebar choice to module run_page function
-    for name, run_func in brands_modules:
-        if page_choice.lower() == name.lower():
-            run_func()
+    # Render the selected brand page
+    for mod in brand_modules.values():
+        if mod.name == choice:
+            mod.render()
             break
