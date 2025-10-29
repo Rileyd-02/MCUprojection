@@ -53,7 +53,7 @@ choice = st.sidebar.radio("Choose page", pages)
 # -----------------------------
 # Main Page Rendering
 # -----------------------------
-if choice == "🏠 Home":
+if choice == "Home":
     st.title("📦 MCU Projection Tool")
     st.markdown(
         """
