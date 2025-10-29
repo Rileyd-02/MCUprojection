@@ -47,7 +47,7 @@ brand_modules = load_brand_modules()
 # Sidebar Navigation
 # -----------------------------
 st.sidebar.title("Accounts")
-pages = ["🏠 Home"] + [mod.name for mod in brand_modules.values()]
+pages = ["Home"] + [mod.name for mod in brand_modules.values()]
 choice = st.sidebar.radio("Choose page", pages)
 
 # -----------------------------
@@ -69,3 +69,4 @@ else:
         if mod.name == choice:
             mod.render()
             break
+
