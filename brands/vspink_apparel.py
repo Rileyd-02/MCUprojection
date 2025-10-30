@@ -6,6 +6,9 @@ from io import BytesIO
 # Display name in sidebar
 name = "VSPink Apparel"
 
+# -----------------------------
+# Helper: export Excel
+# -----------------------------
 def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -13,30 +16,30 @@ def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     output.seek(0)
     return output
 
+# -----------------------------
+# Transformation: Buy Sheet → MCU
+# -----------------------------
 def transform_vspink_apparel(df: pd.DataFrame) -> pd.DataFrame:
     """
     Transform VSPink Apparel Buy Sheet → MCU Format.
-    - Converts EX-mill to datetime and to Month label (e.g. "Oct-25")
-    - Ensures Qty (m) is numeric
-    - Pivots so each Month becomes a column with Qty sums
-    - Preserves other metadata columns (Customer, Supplier, Article, etc.)
+    - Converts EX-mill to Month (e.g., Nov-25)
+    - Ensures Qty is numeric
+    - Pivots Month columns
+    - Preserves other metadata
     """
 
-    # normalize column names
-    df = df.copy()
+    # Skip blank first row if present
+    if df.iloc[0].isna().all():
+        df = df.iloc[1:].copy()
+
+    # Normalize column names
     df.columns = df.columns.str.strip().str.replace("\n", " ").str.replace("\r", " ")
 
-    # Detect key columns flexibly (case-insensitive)
-    col_lower = {c.lower(): c for c in df.columns}
-
+    # Detect columns
     def find_column(key_words):
-        for k in key_words:
-            if k in col_lower:
-                return col_lower[k]
-        for col in df.columns:
-            low = col.lower()
-            for kw in key_words:
-                if kw in low:
+        for kw in key_words:
+            for col in df.columns:
+                if kw.lower() in col.lower():
                     return col
         return None
 
@@ -44,71 +47,80 @@ def transform_vspink_apparel(df: pd.DataFrame) -> pd.DataFrame:
     exmill_col = find_column(["ex-mill", "ex mill", "exmill"])
     qty_col = find_column(["qty", "qty (m)"])
 
-    if article_col is None or exmill_col is None or qty_col is None:
-        raise ValueError("Could not detect required columns. Ensure file has 'Article', 'EX-mill' and 'Qty (m)' columns.")
+    if not article_col or not exmill_col or not qty_col:
+        raise ValueError("Could not detect required columns: Article, EX-mill, Qty.")
 
-    # Parse EX-mill -> datetime
-    df[exmill_col] = pd.to_datetime(df[exmill_col], errors="coerce")
+    # Parse EX-mill → datetime (if not already)
+    if not pd.api.types.is_datetime64_any_dtype(df[exmill_col]):
+        df[exmill_col] = pd.to_datetime(df[exmill_col], errors="coerce")
 
-    # Drop rows without a valid ex-mill date or without an article
+    # Drop rows without valid EX-mill or Article
     df = df.dropna(subset=[exmill_col, article_col])
 
     if df.empty:
         return pd.DataFrame()
 
-    # Month label
+    # Create Month label
     df["Month"] = df[exmill_col].dt.strftime("%b-%y")
 
-    # Ensure Qty is numeric
-    df[qty_col] = df[qty_col].astype(str).str.replace(",", "", regex=False).str.strip()
+    # Clean Qty and convert to numeric
+    df[qty_col] = (
+        df[qty_col].astype(str)
+        .str.replace(",", "", regex=False)
+        .str.strip()
+    )
     df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0)
 
-    # Metadata columns (keep all except Qty, EX-mill, Month)
+    # Keep metadata columns (everything except Qty, EX-mill, Month)
     meta_cols = [c for c in df.columns if c not in [qty_col, exmill_col, "Month"]]
-    index_cols = meta_cols if meta_cols else [article_col]
 
-    grouped = (
-        df.groupby(index_cols + ["Month"], dropna=False, as_index=False)[qty_col]
-          .sum()
-    )
+    # Group by metadata + Month
+    grouped = df.groupby(meta_cols + ["Month"], as_index=False)[qty_col].sum()
 
+    # Pivot Month → columns
     pivot_df = grouped.pivot_table(
-        index=index_cols,
+        index=meta_cols,
         columns="Month",
         values=qty_col,
-        aggfunc="sum",
         fill_value=0
     ).reset_index()
 
     # Sort month columns chronologically
-    month_cols = [c for c in pivot_df.columns if c not in index_cols]
+    month_cols = [c for c in pivot_df.columns if c not in meta_cols]
     if month_cols:
         parsed = pd.to_datetime(month_cols, format="%b-%y", errors="coerce")
         order = [m for _, m in sorted(zip(parsed, month_cols))]
-        pivot_df = pivot_df[index_cols + order]
+        pivot_df = pivot_df[meta_cols + order]
 
+    # Flatten column names
     pivot_df.columns = [str(c) for c in pivot_df.columns]
+
     return pivot_df
 
+# -----------------------------
 # Streamlit UI
+# -----------------------------
 def render():
     st.header("VSPink Apparel — Buy Sheet → MCU Format")
 
     uploaded = st.file_uploader(
-        "Upload VSPink Apparel Buy Sheet (skip first blank row)", 
-        type=["xlsx", "xls", "csv"], key="vspink_apparel_file"
+        "Upload VSPink Apparel Buy Sheet",
+        type=["xlsx", "xls", "csv"],
+        key="vspink_apparel_file"
     )
 
     if uploaded:
         try:
+            # Read file
             if str(uploaded).lower().endswith(".csv") or uploaded.type == "text/csv":
-                df = pd.read_csv(uploaded, header=1)  # skip first row
+                df = pd.read_csv(uploaded, header=1)  # skip first blank row
             else:
-                df = pd.read_excel(uploaded, header=1)  # header in row 2
+                df = pd.read_excel(uploaded, header=1)  # skip first blank row
 
             st.subheader("📄 Input Preview")
             st.dataframe(df.head())
 
+            # Transform
             transformed_df = transform_vspink_apparel(df)
 
             if transformed_df.empty:
