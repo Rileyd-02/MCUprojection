@@ -62,10 +62,11 @@ if choice == "🏠 Home":
         You can use the same brand accounts which uses the same logic. 
         """
     )
-    st.info("🔄 New brand modules in `/brands/` will appear automatically — no restart needed!")
+
 else:
     # Render the selected brand page
     for mod in brand_modules.values():
         if mod.name == choice:
             mod.render()
             break
+
