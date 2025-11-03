@@ -20,22 +20,22 @@ def transform_hugoboss_plm_to_mcu(df):
 name = "HugoBoss - Bucket 02"
 
 def render():
-    st.header("Hugo Boss — Buy Sheet → PLM Download")
+    st.header("Hugo Boss — Buy Sheet → PLM Upload")
     buy_file = st.file_uploader("Upload Buy Sheet (HugoBoss)", type=["xlsx","xls"], key="hb_buy")
     if buy_file:
         try:
             df = pd.read_excel(buy_file)
             df_out = transform_hugoboss_buy_to_plm(df)
-            st.subheader("Preview — PLM Download")
+            st.subheader("Preview — PLM Upload")
             st.dataframe(df_out.head())
             out_bytes = excel_to_bytes(df_out)
-            st.download_button("📥 Download PLM Download", out_bytes, file_name="plm_download_hugoboss.xlsx")
+            st.download_button("📥 Download PLM Upload", out_bytes, file_name="plm_Upload_hugoboss.xlsx")
         except Exception as e:
             st.error(f"Error processing HugoBoss Buy file: {e}")
 
     st.markdown("---")
-    st.header("Hugo Boss — PLM Upload → MCU")
-    plm_file = st.file_uploader("Upload PLM Upload file (HugoBoss)", type=["xlsx","xls"], key="hb_plm")
+    st.header("Hugo Boss — PLM Download → MCU")
+    plm_file = st.file_uploader("Upload PLM Download file (HugoBoss)", type=["xlsx","xls"], key="hb_plm")
     if plm_file:
         try:
             df = pd.read_excel(plm_file)
