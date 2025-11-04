@@ -1,121 +1,132 @@
+# brands/ndc.py
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-from datetime import timedelta
+from dateutil.relativedelta import relativedelta
 
 name = "NDC"
 
-def excel_to_bytes(df: pd.DataFrame, sheet_name="Sheet1"):
-    out = BytesIO()
-    with pd.ExcelWriter(out, engine="openpyxl") as w:
-        df.to_excel(w, index=False, sheet_name=sheet_name)
-    out.seek(0)
-    return out
+def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    output.seek(0)
+    return output
 
 def transform_ndc(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df.columns = df.columns.map(str).str.strip()
+    df.columns = df.columns.str.strip()
 
-    # --- Detect Supplier columns ---
+    # detect month columns like "November-25", "December-25", etc.
+    month_cols = [c for c in df.columns if "-" in c and any(m in c.lower() for m in [
+        "jan", "feb", "mar", "apr", "may", "jun",
+        "jul", "aug", "sep", "oct", "nov", "dec"
+    ])]
+
+    if not month_cols:
+        raise ValueError("No month columns detected (e.g. 'November-25', 'Dec-25').")
+
+    # identify supplier and country columns
     supplier_col = next((c for c in df.columns if "supplier" in c.lower()), None)
-    country_col  = next((c for c in df.columns if "country" in c.lower()), None)
+    country_col = next((c for c in df.columns if "country" in c.lower()), None)
+
     if not supplier_col or not country_col:
-        raise ValueError("Missing Supplier or Country column")
+        raise ValueError("Missing required columns: Supplier or Supplier Country")
 
-    # --- Detect month columns (datetime or parseable) ---
-    non_months = [
-        supplier_col, country_col, "Brand", "Division", "Global Collection",
-        "Global Style", "MFG Count", "MAS Prod Category", "Country", "Region",
-        "Reciept Type", "Speed Model", "U Product Line", "Description",
-        "Season", "Style", "BOM", "Cycle", "Article", "UOM",
-        "Composition", "Type of Const 1", "Avg YY"
-    ]
-    month_cols = [c for c in df.columns if c not in non_months]
-    # Try converting to datetime if they’re strings
-    month_dt = []
-    for c in month_cols:
-        try:
-            month_dt.append(pd.to_datetime(c))
-        except Exception:
-            month_dt.append(None)
-    valid = [c for c, d in zip(month_cols, month_dt) if d is not None]
-    if not valid:
-        raise ValueError("No valid month columns detected")
-
-    # --- Melt month data ---
+    # melt the data so each row is one month’s quantity
     melted = df.melt(
-        id_vars=[c for c in df.columns if c not in valid],
-        value_vars=valid,
+        id_vars=[c for c in df.columns if c not in month_cols],
+        value_vars=month_cols,
         var_name="OriginalMonth",
         value_name="Qty"
     )
 
+    # convert quantities
     melted["Qty"] = pd.to_numeric(melted["Qty"], errors="coerce").fillna(0)
-    melted["OriginalMonth_dt"] = pd.to_datetime(melted["OriginalMonth"], errors="coerce")
 
-    # --- Apply lead-time adjustment ---
-    def adjust_date(row):
+    # parse OriginalMonth safely
+    melted["OriginalMonth_dt"] = pd.to_datetime(
+        melted["OriginalMonth"], format="%B-%y", errors="coerce"
+    )
+
+    # if parsing fails, try full month names with year (e.g., "November-25")
+    if melted["OriginalMonth_dt"].isna().all():
+        melted["OriginalMonth_dt"] = pd.to_datetime(
+            melted["OriginalMonth"].str.replace("-", " ", regex=False),
+            format="%B %y",
+            errors="coerce"
+        )
+
+    # fallback for datetimes already parsed (e.g. 2025-11-01)
+    melted.loc[melted["OriginalMonth_dt"].isna(), "OriginalMonth_dt"] = pd.to_datetime(
+        melted["OriginalMonth"], errors="coerce"
+    )
+
+    # adjust by supplier country
+    def adjust_month(row):
         if pd.isna(row["OriginalMonth_dt"]):
-            return pd.NaT
+            return None
         country = str(row[country_col]).strip().lower()
-        delta = timedelta(days=93 if "sri" in country else 120)
-        return row["OriginalMonth_dt"] - delta
+        if "sri" in country or "lanka" in country:
+            return row["OriginalMonth_dt"] - relativedelta(months=3)
+        else:
+            return row["OriginalMonth_dt"] - relativedelta(months=4)
 
-    melted["AdjustedDate"] = melted.apply(adjust_date, axis=1)
-    melted["AdjustedMonth"] = (
-        melted["AdjustedDate"]
-        .dt.to_period("M")
-        .dt.to_timestamp()
-    )
+    melted["AdjustedMonth_dt"] = melted.apply(adjust_month, axis=1)
+    melted["AdjustedMonth"] = melted["AdjustedMonth_dt"].dt.strftime("%B-%y")
 
-    # --- Group quantities into new month buckets ---
-    grouped = (
-        melted.groupby(
-            [c for c in df.columns if c not in valid] + ["AdjustedMonth"],
-            dropna=False, as_index=False
-        )["Qty"].sum()
-    )
+    # group by metadata + adjusted month
+    meta_cols = [c for c in df.columns if c not in month_cols]
+    grouped = melted.groupby(meta_cols + ["AdjustedMonth"], as_index=False)["Qty"].sum()
+
     if grouped.empty:
-        raise ValueError("No rows after adjustment (check Qty values).")
+        st.warning("⚠️ Grouping resulted in empty dataframe — no quantities found after adjustments.")
+        return pd.DataFrame()
 
-    pivoted = grouped.pivot_table(
-        index=[c for c in df.columns if c not in valid],
+    # pivot back
+    pivot = grouped.pivot_table(
+        index=meta_cols,
         columns="AdjustedMonth",
         values="Qty",
-        fill_value=0,
-        aggfunc="sum"
+        aggfunc="sum",
+        fill_value=0
     ).reset_index()
 
-    # Sort months chronologically
-    month_order = sorted([c for c in pivoted.columns if isinstance(c, pd.Timestamp)])
-    pivoted = pivoted[[c for c in pivoted.columns if c not in month_order] + month_order]
+    # sort months chronologically
+    month_order = pd.to_datetime(pivot.columns[~pivot.columns.isin(meta_cols)], format="%B-%y", errors="coerce")
+    ordered_months = [m for _, m in sorted(zip(month_order, pivot.columns[~pivot.columns.isin(meta_cols)]))]
+    pivot = pivot[meta_cols + ordered_months]
 
-    # Clean column headers
-    pivoted.columns = [c.strftime("%b-%y") if isinstance(c, pd.Timestamp) else str(c) for c in pivoted.columns]
-    return pivoted
+    return pivot
 
 def render():
-    st.header("NDC — Lead Time Adjustment Tool")
+    st.header("NDC — Leadtime Adjusted MCU Converter")
 
-    uploaded = st.file_uploader("Upload NDC MCU File", type=["xlsx", "xls"], key="ndc_file")
+    uploaded = st.file_uploader("Upload NDC MCU file", type=["xlsx", "xls", "csv"], key="ndc_file")
 
     if uploaded:
         try:
-            df = pd.read_excel(uploaded)
+            df = pd.read_excel(uploaded) if uploaded.name.endswith((".xlsx", ".xls")) else pd.read_csv(uploaded)
             st.subheader("📄 Input Preview")
             st.dataframe(df.head())
 
-            transformed = transform_ndc(df)
-            st.subheader("✅ Lead Time Adjusted Output")
-            st.dataframe(transformed.head())
+            transformed_df = transform_ndc(df)
 
-            out = excel_to_bytes(transformed, "Leadtime_Adjusted")
+            if transformed_df.empty:
+                st.warning("⚠️ Result is empty after transformation. Check month headers and Supplier Country values.")
+                return
+
+            st.subheader("✅ Leadtime Adjusted Output")
+            st.dataframe(transformed_df.head())
+
+            out_bytes = excel_to_bytes(transformed_df, sheet_name="Leadtime Adjusted MCU")
+
             st.download_button(
-                "📥 Download Adjusted MCU File",
-                data=out,
-                file_name="NDC_Leadtime_Adjusted.xlsx",
+                label="📥 Download Leadtime Adjusted MCU.xlsx",
+                data=out_bytes,
+                file_name="Leadtime_Adjusted_MCU.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
         except Exception as e:
-            st.error(f"❌ Error: {e}")
+            st.error(f"❌ Error processing NDC file: {e}")
