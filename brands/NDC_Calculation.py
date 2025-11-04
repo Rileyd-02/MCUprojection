@@ -3,11 +3,11 @@ import pandas as pd
 from io import BytesIO
 from dateutil.relativedelta import relativedelta
 
-
+# Display name in sidebar
 name = "NDC"
 
 def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
-
+    """Convert DataFrame to Excel bytes for download."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
@@ -15,137 +15,110 @@ def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     return output
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 def transform_ndc(df: pd.DataFrame) -> pd.DataFrame:
-
-
+    """
+    NDC transformation:
+    - Detects month columns (like 'November-25', 'December-25')
+    - Adjusts quantities backward by 3 months (local) or 4 months (foreign)
+    based on Supplier Country
+    """
 
     df = df.copy()
-    df.columns = df.columns.str.strip()  # remove trailing spaces
 
-    # --- Explicitly define key columns ---
-   supplier_col = [c for c in df.columns if "supplier" in c.lower() and "country" not in c.lower()][0]
-   country_col = [c for c in df.columns if "country" in c.lower()][0]
+    # Normalize column names
+    df.columns = df.columns.str.strip()
 
+    # Identify key columns
+    supplier_col = "Supplier"
+    country_col = "Supplier Country"
 
+    if supplier_col not in df.columns or country_col not in df.columns:
+        raise ValueError("Required columns 'Supplier' or 'Supplier Country' not found.")
 
-
-    # --- Detect month columns ---
+    # Detect month columns like "November-25"
     month_cols = [
-        c for c in df.columns
-        if "-" in c and any(m in c.lower() for m in [
-@@ -33,91 +52,90 @@ def transform_ndc(df: pd.DataFrame) -> pd.DataFrame:
+        c for c in df.columns if "-" in c and any(m in c for m in [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul",
+            "Aug", "Sep", "Oct", "Nov", "Dec"
+        ])
     ]
 
     if not month_cols:
-        raise ValueError("No month columns detected (e.g. 'November-25', 'December-25').")
+        raise ValueError("No valid month columns detected.")
 
-    # --- Melt to long format ---
-    melted = df.melt(
-        id_vars=[c for c in df.columns if c not in month_cols],
-        value_vars=month_cols,
-        var_name="OriginalMonth",
-        value_name="Qty"
-    )
+    st.info(f"🗓 Detected month columns: {month_cols}")
 
+    # Create a working copy of numeric data
+    df_months = df[month_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
 
-    melted["Qty"] = pd.to_numeric(melted["Qty"], errors="coerce").fillna(0)
+    # Parse month columns to datetime for shifting
+    month_dt = pd.to_datetime(month_cols, format="%B-%y", errors="coerce")
 
+    # Prepare a mapping of column -> adjusted month
+    adjusted_data = pd.DataFrame(0, index=df.index, columns=month_cols)
 
-    # Convert 'November-25' → datetime
-    melted["OriginalMonth_dt"] = pd.to_datetime(
-    "01-" + melted["OriginalMonth"].str.replace(" ", "-"), errors="coerce"
-    )
-    # --- Adjust months by supplier country ---
-    def adjust_month(row):
-        if pd.isna(row["OriginalMonth_dt"]):
-            return None
-        country = str(row[country_col]).strip().lower()
-        if "sri" in country or "lanka" in country:
-            return row["OriginalMonth_dt"] - relativedelta(months=3)
-        else:
-            return row["OriginalMonth_dt"] - relativedelta(months=4)
+    for i, row in df.iterrows():
+        supplier_country = str(row[country_col]).strip().lower()
+        months_back = 3 if "sri lanka" in supplier_country else 4
 
-    melted["AdjustedMonth_dt"] = melted.apply(adjust_month, axis=1)
-    melted["AdjustedMonth"] = melted["AdjustedMonth_dt"].dt.strftime("%B-%y")
+        for j, col in enumerate(month_cols):
+            qty = df_months.at[i, col]
+            if qty == 0:
+                continue
 
-    # Drop blanks
-    melted = melted.dropna(subset=["AdjustedMonth", "Qty"])
+            # Compute adjusted date
+            old_date = month_dt[j]
+            new_date = old_date - relativedelta(months=months_back)
+            new_month_label = new_date.strftime("%B-%y")
 
-    # --- Group and pivot ---
-    meta_cols = [c for c in df.columns if c not in month_cols]
-    grouped = melted.groupby(meta_cols + ["AdjustedMonth"], as_index=False)["Qty"].sum()
+            # If adjusted month exists in columns, accumulate qty there
+            if new_month_label in adjusted_data.columns:
+                adjusted_data.at[i, new_month_label] += qty
 
-    if grouped.empty:
-        st.warning("⚠️ Grouping resulted in empty dataframe — no quantities found after adjustments.")
+    # Merge adjusted month data back
+    df_result = df.copy()
+    df_result[month_cols] = adjusted_data[month_cols]
+
+    # Drop rows where all month values are 0
+    if df_result[month_cols].sum(axis=1).eq(0).all():
+        st.warning("⚠️ Result is empty after transformation. Check Supplier/Country columns and month headers.")
         return pd.DataFrame()
 
-    pivot = grouped.pivot_table(
-        index=meta_cols,
+    return df_result
 
 
-
-
-
-
-
-        columns="AdjustedMonth",
-        values="Qty",
-        aggfunc="sum",
-        fill_value=0
-    ).reset_index()
-
-    # --- Sort months chronologically ---
-    month_order = pd.to_datetime(pivot.columns[~pivot.columns.isin(meta_cols)], format="%B-%y", errors="coerce")
-    ordered_months = [m for _, m in sorted(zip(month_order, pivot.columns[~pivot.columns.isin(meta_cols)]))]
-    pivot = pivot[meta_cols + ordered_months]
-
-
-
-
-    return pivot
-
-
+# Streamlit Page
 def render():
-    st.header("NDC — Leadtime Adjusted MCU Converter")
+    st.header("🧾 NDC — Lead Time Adjustment")
 
-    uploaded = st.file_uploader("Upload NDC MCU file", type=["xlsx", "xls", "csv"], key="ndc_file")
+    uploaded = st.file_uploader("Upload NDC MCU File", type=["xlsx", "xls", "csv"], key="ndc_file")
 
     if uploaded:
         try:
-            df = pd.read_excel(uploaded) if uploaded.name.endswith((".xlsx", ".xls")) else pd.read_csv(uploaded)
+            if uploaded.name.endswith(".csv"):
+                df = pd.read_csv(uploaded)
+            else:
+                df = pd.read_excel(uploaded)
+
             st.subheader("📄 Input Preview")
             st.dataframe(df.head())
 
-            transformed_df = transform_ndc(df)
+            result = transform_ndc(df)
 
-            if transformed_df.empty:
-                st.warning("⚠️ Result is empty after transformation. Check month headers and Supplier Country values.")
+            if result.empty:
+                st.warning("⚠️ No valid data after transformation.")
                 return
 
-            st.subheader("✅ Leadtime Adjusted Output")
-            st.dataframe(transformed_df.head())
+            st.subheader("✅ Adjusted Output")
+            st.dataframe(result.head())
 
-            out_bytes = excel_to_bytes(transformed_df, sheet_name="Leadtime Adjusted MCU")
-
-
+            # Download link
+            out_bytes = excel_to_bytes(result, sheet_name="Leadtime_Adjusted")
 
             st.download_button(
-                label="📥 Download Leadtime Adjusted MCU.xlsx",
+                label="📥 Download Leadtime Adjusted File",
                 data=out_bytes,
-                file_name="Leadtime_Adjusted_MCU.xlsx",
+                file_name="NDC_Leadtime_Adjusted.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
