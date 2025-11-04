@@ -19,8 +19,9 @@ def transform_ndc(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = df.columns.str.strip()  # remove trailing spaces
 
     # --- Explicitly define key columns ---
-    supplier_col = "Supplier"
-    country_col = "Supplier Country"
+   supplier_col = [c for c in df.columns if "supplier" in c.lower() and "country" not in c.lower()][0]
+   country_col = [c for c in df.columns if "country" in c.lower()][0]
+
 
     # --- Detect month columns ---
     month_cols = [
@@ -46,9 +47,8 @@ def transform_ndc(df: pd.DataFrame) -> pd.DataFrame:
 
     # Convert 'November-25' → datetime
     melted["OriginalMonth_dt"] = pd.to_datetime(
-        "01-" + melted["OriginalMonth"], format="%d-%B-%y", errors="coerce"
+    "01-" + melted["OriginalMonth"].str.replace(" ", "-"), errors="coerce"
     )
-
     # --- Adjust months by supplier country ---
     def adjust_month(row):
         if pd.isna(row["OriginalMonth_dt"]):
@@ -120,3 +120,4 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error processing NDC file: {e}")
+
