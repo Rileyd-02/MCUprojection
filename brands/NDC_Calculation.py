@@ -4,7 +4,7 @@ from io import BytesIO
 from dateutil.relativedelta import relativedelta
 
 # Display name in sidebar
-name = "NDC"
+name = "NDC Calculation"
 
 def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     """Convert DataFrame to Excel bytes for download."""
@@ -89,7 +89,7 @@ def transform_ndc(df: pd.DataFrame) -> pd.DataFrame:
 
 # Streamlit Page
 def render():
-    st.header("🧾 NDC — Lead Time Adjustment")
+    st.header("🧾 NDC — Adjustment")
 
     uploaded = st.file_uploader("Upload NDC MCU File", type=["xlsx", "xls", "csv"], key="ndc_file")
 
@@ -116,11 +116,12 @@ def render():
             out_bytes = excel_to_bytes(result, sheet_name="Leadtime_Adjusted")
 
             st.download_button(
-                label="📥 Download Leadtime Adjusted File",
+                label="📥 Download NDC Adjusted File",
                 data=out_bytes,
-                file_name="NDC_Leadtime_Adjusted.xlsx",
+                file_name="NDC_Adjusted.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
         except Exception as e:
             st.error(f"❌ Error processing NDC file: {e}")
+
