@@ -1,100 +1,108 @@
 import streamlit as st
 import pandas as pd
-import io
-from dateutil.relativedelta import relativedelta
+from io import BytesIO
+from datetime import timedelta
 
-# ==========================================================
-# 🔧 Helper: shift a month string (e.g. "November-25") by X months
-# ==========================================================
-def shift_month_str(month_str: str, offset: int) -> str:
-    try:
-        month_str = month_str.strip().replace(" ", "").replace("–", "-").replace("_", "-")
-        month, year = month_str.split("-")
-        year = int("20" + year) if len(year) == 2 else int(year)
-        dt_date = pd.to_datetime(f"01-{month}-{year}", format="%d-%B-%Y", errors="coerce")
+# Display name on sidebar
+name = "NDC"
 
-        if pd.isna(dt_date):
-            dt_date = pd.to_datetime(f"01-{month[:3]}-{year}", format="%d-%b-%Y", errors="coerce")
-
-        if pd.isna(dt_date):
-            return None
-
-        new_date = dt_date - relativedelta(months=offset)
-        return new_date.strftime("%B-%y")
-    except Exception:
-        return None
+# -------------------------------
+# Helper: Write Excel output
+# -------------------------------
+def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Leadtime Adjusted"):
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    out.seek(0)
+    return out
 
 
-# ==========================================================
-# ⚙️ Core Transformation Logic
-# ==========================================================
+# -------------------------------
+# Transformation Logic
+# -------------------------------
 def transform_ndc(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adjust ex-mill months by lead time based on Supplier Country.
+    Local (Sri Lanka) = minus 3 months (≈93 days)
+    Foreign = minus 4 months (≈120 days)
+    """
+
     df = df.copy()
-    df.columns = df.columns.str.strip()
+    df.columns = df.columns.str.strip().str.replace("\n", " ")
 
-    # --- Detect Supplier and Country Columns ---
-    supplier_col = next((c for c in df.columns if "supplier" in c.lower() and "country" not in c.lower()), None)
-    country_col = next((c for c in df.columns if "country" in c.lower()), None)
+    # --- Hardcode key column names (for reliability) ---
+    supplier_col = "Supplier"
+    country_col = "Supplier Country"
 
-    if not supplier_col or not country_col:
-        st.error("❌ Could not detect 'Supplier' or 'Supplier Country' columns. Check your headers.")
-        return pd.DataFrame()
+    # Ensure these columns exist
+    if supplier_col not in df.columns or country_col not in df.columns:
+        raise ValueError("Missing required columns 'Supplier' or 'Supplier Country'.")
 
-    # --- Detect Month Columns ---
-    month_cols = [
-        c.strip() for c in df.columns
-        if "-" in c and any(m in c.lower() for m in [
+    # --- Detect month columns dynamically ---
+    month_cols = []
+    for c in df.columns:
+        c_str = str(c).strip()
+        # Detect names like "November-25"
+        if any(m in c_str.lower() for m in [
             "jan", "feb", "mar", "apr", "may", "jun",
             "jul", "aug", "sep", "oct", "nov", "dec"
-        ])
-    ]
+        ]):
+            month_cols.append(c)
+        else:
+            # Detect datetime-like names like "2025-11-01 00:00:00"
+            try:
+                pd.to_datetime(c_str)
+                month_cols.append(c)
+            except Exception:
+                continue
 
     if not month_cols:
-        st.error("❌ No valid month columns found. Expected headers like 'November-25', 'December-25', etc.")
+        st.error("❌ No valid month columns found. Check headers — must look like 'November-25' or '2025-11-01'.")
         return pd.DataFrame()
 
-    # --- Melt Data ---
-    melted = df.melt(
-        id_vars=[c for c in df.columns if c not in month_cols],
-        value_vars=month_cols,
-        var_name="OriginalMonth",
-        value_name="Qty"
-    )
+    st.info(f"🗓 Detected month columns: {month_cols}")
 
+    # --- Melt to long format ---
+    id_columns = [c for c in df.columns if c not in month_cols]
+    melted = df.melt(id_vars=id_columns, value_vars=month_cols,
+                     var_name="Month", value_name="Qty")
+
+    # Drop rows with no quantity
     melted["Qty"] = pd.to_numeric(melted["Qty"], errors="coerce").fillna(0)
     melted = melted[melted["Qty"] > 0]
 
     if melted.empty:
-        st.warning("⚠️ No valid quantities found.")
+        st.warning("⚠️ No valid quantity data found after melting. Please check the file content.")
         return pd.DataFrame()
 
-    # --- Apply Leadtime Logic ---
-    def get_adjusted_month(row):
+    # --- Normalize month column to datetime ---
+    def parse_month(m):
+        try:
+            return pd.to_datetime(m, errors="coerce")
+        except Exception:
+            return pd.to_datetime("1900-01-01")
+
+    melted["MonthDate"] = melted["Month"].apply(parse_month)
+
+    # --- Apply lead time offset ---
+    def adjust_date(row):
         country = str(row[country_col]).strip().lower()
-        original = str(row["OriginalMonth"]).strip()
-        if not original:
-            return None
-        # Local = 3 months (Sri Lanka)
-        # Foreign = 4 months
-        offset = 3 if ("sri" in country or "lanka" in country) else 4
-        return shift_month_str(original, offset)
+        if "sri lanka" in country or "stretchline" in str(row[supplier_col]).lower():
+            return row["MonthDate"] - timedelta(days=93)
+        else:
+            return row["MonthDate"] - timedelta(days=120)
 
-    melted["AdjustedMonth"] = melted.apply(get_adjusted_month, axis=1)
-    melted = melted.dropna(subset=["AdjustedMonth"])
+    melted["AdjustedDate"] = melted.apply(adjust_date, axis=1)
+    melted["AdjustedMonth"] = melted["AdjustedDate"].dt.strftime("%B-%y")
 
-    if melted.empty:
-        st.warning("⚠️ No rows found after month adjustment.")
-        return pd.DataFrame()
-
-    # --- Group by adjusted month ---
-    id_columns = [c for c in df.columns if c not in month_cols]
+    # --- Group adjusted results ---
     grouped = (
-        melted.groupby(id_columns + ["AdjustedMonth"], as_index=False)["Qty"]
+        melted.groupby(id_columns + ["AdjustedMonth"], dropna=False, as_index=False)["Qty"]
         .sum()
     )
 
     if grouped.empty:
-        st.warning("⚠️ Grouping resulted in empty dataframe — check supplier/country values.")
+        st.warning("⚠️ Grouping resulted in empty dataframe — no quantities found after adjustments.")
         return pd.DataFrame()
 
     # --- Pivot back to wide format ---
@@ -106,53 +114,56 @@ def transform_ndc(df: pd.DataFrame) -> pd.DataFrame:
         fill_value=0
     ).reset_index()
 
-    if pivot_df.empty:
-        st.warning("⚠️ Result is empty after transformation. Check headers or data.")
-        return pd.DataFrame()
+    # --- Ensure all expected month columns exist (avoid empty results) ---
+    adjusted_months = sorted(list(set(melted["AdjustedMonth"].dropna())))
+    for m in adjusted_months:
+        if m not in pivot_df.columns:
+            pivot_df[m] = 0
+
+    # Sort month columns by chronological order
+    month_order = sorted(
+        [m for m in pivot_df.columns if m not in id_columns],
+        key=lambda x: pd.to_datetime(x, format="%B-%y", errors="coerce")
+    )
+    pivot_df = pivot_df[id_columns + month_order]
 
     return pivot_df
 
 
-# ==========================================================
-# 🧩 Streamlit Page UI
-# ==========================================================
-def app():
-    st.title("📦 NDC Leadtime Adjustment Tool")
-    st.markdown("""
-    This tool adjusts MCU data by subtracting lead time from **Ex-Mill months**:
-    - **Local Suppliers (Sri Lanka)** → 3 months earlier  
-    - **Foreign Suppliers** → 4 months earlier
-    ---
-    """)
+# -------------------------------
+# Streamlit Page
+# -------------------------------
+def render():
+    st.header("NDC — Lead Time Adjustment")
 
-    uploaded_file = st.file_uploader("📁 Upload NDC MCU Excel File", type=["xls", "xlsx"])
+    uploaded = st.file_uploader(
+        "📤 Upload MCU Format File",
+        type=["xlsx", "xls"],
+        key="ndc_file"
+    )
 
-    if uploaded_file:
+    if uploaded:
         try:
-            df = pd.read_excel(uploaded_file)
-            st.success("✅ File uploaded successfully.")
+            df = pd.read_excel(uploaded)
+            st.subheader("📄 Input Preview")
             st.dataframe(df.head())
 
             result_df = transform_ndc(df)
 
-            if not result_df.empty:
-                st.success("✅ Transformation complete.")
-                st.dataframe(result_df.head())
+            if result_df.empty:
+                st.warning("⚠️ Result is empty after transformation. Check Supplier/Country columns and month headers.")
+                return
 
-                # Download button
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-                    result_df.to_excel(writer, index=False, sheet_name="Leadtime_Adjusted")
-                output.seek(0)
+            st.subheader("✅ Lead Time Adjusted Output")
+            st.dataframe(result_df.head())
 
-                st.download_button(
-                    label="💾 Download Adjusted File",
-                    data=output,
-                    file_name="NDC_Leadtime_Adjusted.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            else:
-                st.warning("⚠️ No data produced after transformation.")
+            out_bytes = excel_to_bytes(result_df)
+            st.download_button(
+                label="📥 Download Adjusted MCU File",
+                data=out_bytes,
+                file_name="NDC_Leadtime_Adjusted.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
         except Exception as e:
-            st.error(f"❌ Error processing file: {e}")
+            st.error(f"❌ Error processing NDC file: {e}")
