@@ -28,8 +28,8 @@ def transform_vspink_apparel(df: pd.DataFrame) -> pd.DataFrame:
                 return col_map[key]
         return None
 
-    article_col = find_column(["article"])
-    exmill_col = find_column(["ex-mill", "exmill", "ex mill"])
+    article_col = find_column(["Article"])
+    exmill_col = find_column(["EX-mill", "exmill", "ex mill"])
     qty_col = find_column(["qty", "qty(m)", "qty (m)"])
 
     if not article_col or not exmill_col or not qty_col:
@@ -92,3 +92,4 @@ def render():
             )
         except Exception as e:
             st.error(f"❌ Error processing VSPink Apparel file: {e}")
+
