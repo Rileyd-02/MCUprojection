@@ -1,13 +1,15 @@
+# brands/vspink_apparel.py
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-import re
+from dateutil.relativedelta import relativedelta
 
+# Display name in sidebar
 name = "VSPink Apparel"
 
-# ------------------------------
-# Helper: Save Excel
-# ------------------------------
+# ----------------------------
+# Helper utilities
+# ----------------------------
 def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -15,106 +17,78 @@ def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     output.seek(0)
     return output
 
-# ------------------------------
-# Helper: Clean column names deeply
-# ------------------------------
-def deep_clean(col):
-    if pd.isna(col):
-        return ""
-    col = str(col)
-    col = col.replace("\u00A0", "")  # non-breaking space
-    col = col.replace("\u202F", "")  # narrow NBSP
-    col = col.replace("\t", "")
-    col = col.replace("\n", "")
-    col = col.strip()
-    return col
-
-# ------------------------------
-# Transformation Logic
-# ------------------------------
-def transform_vspink_apparel(df: pd.DataFrame) -> pd.DataFrame:
-
-    # 1. Clean all column names
-    original_cols = list(df.columns)
-    clean_map = {}
+def clean_columns(df):
+    """Fix hidden spaces and normalize column names"""
+    cleaned = {}
     for c in df.columns:
-        cleaned = (
-            deep_clean(c)
-            .lower()
-            .replace(" ", "")
-            .replace("-", "")
-            .replace("_", "")
+        new_c = (
+            str(c)
+            .replace("\xa0", " ")
+            .replace("–", "-")
+            .replace("—", "-")
+            .strip()
         )
-        clean_map[c] = cleaned
+        cleaned[c] = new_c
+    df.rename(columns=cleaned, inplace=True)
+    return df
 
-    df = df.rename(columns=clean_map)
+def transform_vspink_apparel(file) -> pd.DataFrame:
+    """Transform Buy Sheet → MCU Format"""
+    df = pd.read_excel(file, header=0)
 
-    # 2. Detect required columns using fuzzy matching
-    def find_col(keyword):
-        for orig, cleaned in clean_map.items():
-            if keyword in cleaned:
-                return orig
-        return None
+    # Remove first blank row if present
+    if df.iloc[0].isna().all():
+        df = df.iloc[1:].copy()
 
-    article_col = find_col("article")
-    exmill_col = find_col("exmill")
-    qty_col = find_col("qty")
+    # Clean column names
+    df = clean_columns(df)
 
-    if not article_col or not exmill_col or not qty_col:
-        raise ValueError(
-            f"Column detection failed.\n"
-            f"Detected cleaned columns:\n{clean_map}"
-        )
+    # Detect required columns
+    for col in ["Customer", "Supplier", "Supplier COO", "Program", "Article", "Qty (m)", "EX-mill"]:
+        if col not in df.columns:
+            raise ValueError(f"❌ Required column missing: {col}")
 
-    # 3. Convert EX-mill
-    df[exmill_col] = pd.to_datetime(df[exmill_col], errors="coerce")
-
-    # 4. Clean Qty
-    df[qty_col] = (
-        df[qty_col]
-        .astype(str)
-        .str.replace(",", "")
-        .str.replace(" ", "")
-        .str.replace("\u00A0", "")
-        .str.replace("\u202F", "")
-    )
-    df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0)
-
-    # 5. Validate required rows exist
-    df = df.dropna(subset=[exmill_col, article_col])
+    # Parse EX-mill dates
+    df["EX-mill"] = pd.to_datetime(df["EX-mill"], errors="coerce")
+    df = df.dropna(subset=["EX-mill", "Article"])
     if df.empty:
-        raise ValueError("No valid rows found after filtering EX-mill + Article.")
+        raise ValueError("❌ No valid rows found after EX-mill + Article filtering.")
 
-    # 6. MCU month = EX-mill month (MMM-YY)
-    df["Month"] = df[exmill_col].dt.strftime("%b-%y")
+    # Determine sourcing type
+    df["Sourcing Type"] = df["Supplier COO"].apply(lambda x: "LOCAL" if str(x).strip().upper() == "SL" else "FOREIGN")
 
-    # 7. Identify metadata columns
-    meta_cols = [c for c in df.columns if c not in [qty_col, exmill_col, "Month"]]
+    # Back-calc MCU Month
+    def compute_mcu_date(row):
+        if row["Sourcing Type"] == "LOCAL":
+            return row["EX-mill"] - relativedelta(months=3)
+        else:
+            return row["EX-mill"] - relativedelta(months=4)
 
-    # 8. Group rows
-    grouped = df.groupby(meta_cols + ["Month"], as_index=False)[qty_col].sum()
+    df["MCU Month"] = df.apply(compute_mcu_date, axis=1)
+    df["MCU Month"] = df["MCU Month"].dt.strftime("%b-%y")  # e.g., Aug-25
 
-    # 9. Pivot to MCU format
-    pivot_df = grouped.pivot_table(
-        index=meta_cols,
-        columns="Month",
-        values=qty_col,
+    # Prepare final MCU output
+    output_cols = ["Customer", "Supplier", "Supplier COO", "Program", "Article", "Qty (m)", "EX-mill", "MCU Month"]
+    final_df = df[output_cols]
+
+    # Pivot so that each MCU Month is a column with Qty
+    pivot_df = final_df.pivot_table(
+        index=["Customer", "Supplier", "Supplier COO", "Program", "Article"],
+        columns="MCU Month",
+        values="Qty (m)",
+        aggfunc="sum",
         fill_value=0
     ).reset_index()
 
-    # 10. Reorder month columns chronologically
-    month_cols = [c for c in pivot_df.columns if c not in meta_cols]
-    parsed = pd.to_datetime(month_cols, format="%b-%y", errors="coerce")
-    ordered = [m for _, m in sorted(zip(parsed, month_cols))]
+    # Flatten columns
+    pivot_df.columns.name = None
+    pivot_df.columns = [str(c) for c in pivot_df.columns]
 
-    final_df = pivot_df[meta_cols + ordered]
+    return pivot_df
 
-    return final_df
-
-
-# ------------------------------
-# Streamlit UI
-# ------------------------------
+# ----------------------------
+# Streamlit Page
+# ----------------------------
 def render():
     st.header("VSPink Apparel — Buy Sheet → MCU Format")
 
@@ -126,27 +100,20 @@ def render():
 
     if uploaded:
         try:
-            # Read with row 0 as header (your file has headers in row 0)
-            if uploaded.name.lower().endswith(".csv"):
-                df = pd.read_csv(uploaded)
-            else:
-                df = pd.read_excel(uploaded)
+            df_out = transform_vspink_apparel(uploaded)
+            if df_out.empty:
+                st.warning("No valid rows found after transformation.")
+                return
 
-            st.subheader("📄 Input Preview")
-            st.dataframe(df.head())
+            st.subheader("📄 Preview Transformed MCU")
+            st.dataframe(df_out.head())
 
-            transformed_df = transform_vspink_apparel(df)
-
-            st.subheader("✅ Transformed Output")
-            st.dataframe(transformed_df.head())
-
-            out_bytes = excel_to_bytes(transformed_df, sheet_name="MCU")
-
+            out_bytes = excel_to_bytes(df_out, sheet_name="MCU")
             st.download_button(
-                "📥 Download MCU - VSPink Apparel.xlsx",
+                label="📥 Download MCU - VSPink Apparel.xlsx",
                 data=out_bytes,
                 file_name="MCU_VSPink_Apparel.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
         except Exception as e:
