@@ -36,14 +36,10 @@ def transform_plm_download_to_mcu(df, season="Spring 2025"):
     mcu["Supplier Country"] = df["Supplier Country"]
     mcu["Avg YY"] = df["Avg YY"]
 
-    # MCU month mapping (Tommy EU uses Nov–Mar)
-    mcu["Nov"] = df.get("Nov", 0)
-    mcu["Dec"] = df.get("Dec", 0)
-    mcu["Jan"] = df.get("Jan", 0)
-    mcu["Feb"] = df.get("Feb", 0)
-    mcu["Mar"] = df.get("Mar", 0)
+    # MCU month mapping
+    for m in ["Nov", "Dec", "Jan", "Feb", "Mar"]:
+        mcu[m] = df.get(f"Sum of {m}", df.get(m, 0))
 
-    # Fixed values
     mcu["Column24"] = ""
     mcu["Column25"] = ""
     mcu["Fabrics_1"] = "Fabrics"
@@ -53,8 +49,8 @@ def transform_plm_download_to_mcu(df, season="Spring 2025"):
     return mcu
 
 
-def process_tommy_eu(buy_sheet, plm_download_files, season="Spring 2025"):
-    buy_df = pd.read_excel(buy_sheet)
+def process_tommy_eu(buy_sheet_file, plm_download_files, season="Spring 2025"):
+    buy_df = pd.read_excel(buy_sheet_file)
     plm_upload = transform_buy_to_plm_upload(buy_df)
 
     mcu_frames = []
@@ -67,35 +63,31 @@ def process_tommy_eu(buy_sheet, plm_download_files, season="Spring 2025"):
 
 
 # -----------------------------------------------------------
-# STREAMLIT UI FOR TOMMY EU BRAND
+# UI
 # -----------------------------------------------------------
 
-def tommy_eu_ui():
+def render():
     st.header("🇪🇺 Tommy EU – Buy Sheet → PLM Upload → MCU Format")
 
     st.markdown("""
-    Use this tool to process **Tommy EU** raw files:
-    - Buy Sheet ➜ PLM Upload file  
-    - PLM Download(s) ➜ MCU format  
+    Use this tool to process **Tommy EU** files:
+    - Buy Sheet ➜ PLM Upload  
+    - PLM Download(s) ➜ MCU Format  
     """)
 
-    # ---------------- BUY SHEET UPLOAD ----------------
-    st.subheader("📘 Step 1 – Upload Buy Sheet")
-    buy_sheet = st.file_uploader("Upload the buy sheet (Excel)", type=["xlsx"])
-
-    # ---------------- PLM DOWNLOAD UPLOAD ----------------
-    st.subheader("📗 Step 2 – Upload PLM Download File(s)")
+    buy_sheet = st.file_uploader("Upload the Buy Sheet", type=["xlsx"], key="tommy_buy_sheet")
     plm_downloads = st.file_uploader(
-        "Upload one or multiple PLM Download files",
+        "Upload PLM Download file(s)",
         type=["xlsx"],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        key="tommy_plm_download"
     )
 
-    season = st.text_input("Season", "Spring 2025")
+    season = st.text_input("Season", value="Spring 2025", key="tommy_season")
 
     if st.button("Process Tommy EU Files"):
         if not buy_sheet:
-            st.error("Please upload the Buy Sheet file.")
+            st.error("Please upload a Buy Sheet.")
             return
         
         if not plm_downloads:
@@ -105,48 +97,35 @@ def tommy_eu_ui():
         try:
             plm_upload, mcu_final = process_tommy_eu(buy_sheet, plm_downloads, season)
 
-            st.success("✔ Tommy EU files processed successfully!")
+            st.success("✔ Processing completed!")
 
-            # ---------------- DOWNLOAD PLM UPLOAD ----------------
-            st.subheader("📥 Download PLM Upload File")
-
-            plm_buffer = io.BytesIO()
-            with pd.ExcelWriter(plm_buffer, engine="xlsxwriter") as writer:
+            # PLM upload download
+            buffer1 = io.BytesIO()
+            with pd.ExcelWriter(buffer1, engine="xlsxwriter") as writer:
                 plm_upload.to_excel(writer, index=False, sheet_name="PLM Upload")
 
             st.download_button(
-                "Download PLM Upload",
-                plm_buffer.getvalue(),
+                "⬇ Download PLM Upload",
+                buffer1.getvalue(),
                 file_name="TommyEU_PLM_Upload.xlsx"
             )
 
-            # ---------------- DOWNLOAD MCU FILE ----------------
-            st.subheader("📥 Download MCU Format File")
-
-            mcu_buffer = io.BytesIO()
-            with pd.ExcelWriter(mcu_buffer, engine="xlsxwriter") as writer:
+            # MCU download
+            buffer2 = io.BytesIO()
+            with pd.ExcelWriter(buffer2, engine="xlsxwriter") as writer:
                 mcu_final.to_excel(writer, index=False, sheet_name="MCU")
 
             st.download_button(
-                "Download MCU File",
-                mcu_buffer.getvalue(),
+                "⬇ Download MCU Format",
+                buffer2.getvalue(),
                 file_name="TommyEU_MCU.xlsx"
             )
 
-            # ---------------- PREVIEW TABLES ----------------
-            st.subheader("📄 Preview – PLM Upload")
+            st.subheader("PLM Upload Preview")
             st.dataframe(plm_upload.head())
 
-            st.subheader("📄 Preview – MCU Output")
+            st.subheader("MCU Preview")
             st.dataframe(mcu_final.head())
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
-
-
-# -----------------------------------------------------------
-# CALLABLE ENTRY FOR MAIN APP
-# -----------------------------------------------------------
-
-if __name__ == "__main__":
-    tommy_eu_ui()
