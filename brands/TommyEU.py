@@ -17,34 +17,38 @@ def excel_to_bytes(df: pd.DataFrame, sheet_name="Sheet1"):
 def buy_to_plm(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert Tommy EU Buy Sheet → PLM Upload
-    - Row 0: month names
+    - Row 0: month names (Jul, Aug, ...)
     - Row 1: PO Proposal (skip)
     - Row 2: actual headers
     - Keep only Style number and month columns
     """
-    # Capture months from row 0 (columns 1 onward)
-    months_row = df.iloc[0, 1:].tolist()
-    months_row = [str(m).strip() for m in months_row if str(m).strip() != ""]
-    
-    # Drop first two rows (row0=months, row1=PO Proposal)
-    df = df.drop([0, 1]).reset_index(drop=True)
+    # Capture months from row 0 (columns 1 to 13)
+    months = df.iloc[0, 1:13].tolist()
+    months = [str(m).strip() for m in months]
 
-    # Set row 2 as header
+    # Drop first two rows
+    df = df.drop([0,1]).reset_index(drop=True)
+
+    # Set row 0 as header
     df.columns = df.iloc[0].astype(str).str.strip()
     df = df[1:].reset_index(drop=True)
 
-    # Identify style column
+    # Style column
     style_col = "Generic Article"
     if style_col not in df.columns:
         style_col = df.columns[0]
 
-    # Keep only style + months
-    plm_months = [m for m in months_row if m in df.columns]
-    plm_df = df[[style_col] + plm_months].copy()
+    # Keep only style + month columns
+    # The month values are usually numeric in columns starting from col 7 (adjust as needed)
+    month_cols = months
+    df_months = df.iloc[:,  df.columns.get_loc(style_col)+1 : df.columns.get_loc(style_col)+1+len(months)]
+    df_months.columns = month_cols
+
+    plm_df = pd.concat([df[[style_col]].reset_index(drop=True), df_months.reset_index(drop=True)], axis=1)
     plm_df = plm_df.rename(columns={style_col: "Style number"})
 
-    # Convert month columns to numeric
-    for col in plm_months:
+    # Ensure month columns are numeric
+    for col in month_cols:
         plm_df[col] = pd.to_numeric(plm_df[col].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
 
     return plm_df
@@ -52,21 +56,17 @@ def buy_to_plm(df: pd.DataFrame) -> pd.DataFrame:
 def plm_to_mcu(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert Tommy EU PLM Download → MCU format
-    - Drops 'Sum of ...' columns if present
-    - Keeps only necessary columns for MCU
     """
     df.columns = df.columns.str.strip()
 
-    # Remove columns starting with 'Sum of'
+    # Drop 'Sum of' columns
     keep_cols = [c for c in df.columns if not c.lower().startswith("sum of")]
     df = df[keep_cols].copy()
 
-    # If month columns exist, pivot or keep them as is
+    # Ensure month columns are numeric
     month_cols = [c for c in df.columns if c[:3].capitalize() in ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]]
-    if month_cols:
-        # Ensure numeric
-        for col in month_cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    for col in month_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     return df
 
