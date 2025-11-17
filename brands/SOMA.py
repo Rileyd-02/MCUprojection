@@ -8,25 +8,34 @@ name = "SOMA"
 # -----------------------------
 # PLM Download → MCU
 # -----------------------------
-def plm_to_mcu(df: pd.DataFrame) -> pd.DataFrame:
-    # Clean column names
-    df.columns = df.columns.str.strip()
+def plm_to_mcu_all_sheets(file) -> pd.DataFrame:
+    """Read all sheets and transform into MCU format."""
+    all_sheets = pd.read_excel(file, sheet_name=None)  # read all sheets
+    mcu_list = []
 
-    # Identify month columns (Jun → Dec, etc.)
-    month_cols = [c for c in df.columns if c.lower() in ['jun','jul','aug','sep','oct','nov','dec']]
+    for sheet_name, df in all_sheets.items():
+        df = df.copy()
+        df.columns = df.columns.str.strip()
 
-    # Identify Style column
-    style_col = 'Style Number' if 'Style Number' in df.columns else df.columns[0]
+        # Columns to keep
+        keep_cols = [
+            'Season','Style','BOM','Cycle','Article','Type of Const 1','Supplier',
+            'UOM','Composition','Measurement','Supplier Country','Avg YY'
+        ]
 
-    # Keep only Style + Month columns
-    df_out = df[[style_col] + month_cols].copy()
-    df_out = df_out.rename(columns={style_col: 'Style'})
+        # Dynamically detect month columns
+        month_cols = [c for c in df.columns if '-' in c and not c.lower().startswith('sum')]
 
-    # Optional: convert month columns to numeric
-    for col in month_cols:
-        df_out[col] = pd.to_numeric(df_out[col].astype(str).str.replace(",",""), errors='coerce').fillna(0)
+        df_mcu = df[keep_cols + month_cols]
 
-    return df_out
+        # Add 'Sheet Names' column
+        df_mcu.insert(0, 'Sheet Names', 'Fabrics')
+
+        mcu_list.append(df_mcu)
+
+    # Concatenate all sheets
+    final_df = pd.concat(mcu_list, ignore_index=True)
+    return final_df
 
 # -----------------------------
 # Streamlit UI
@@ -36,8 +45,7 @@ def render():
     plm_file = st.file_uploader("Upload PLM Download file (SOMA)", type=["xlsx","xls"], key="soma_plm")
     if plm_file:
         try:
-            df = pd.read_excel(plm_file)
-            df_out = plm_to_mcu(df)
+            df_out = plm_to_mcu_all_sheets(plm_file)
             st.subheader("Preview — MCU Format")
             st.dataframe(df_out.head())
             out_bytes = excel_to_bytes(df_out)
