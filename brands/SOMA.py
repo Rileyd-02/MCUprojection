@@ -5,9 +5,6 @@ from utils import excel_to_bytes
 
 name = "SOMA"
 
-# -----------------------------
-# PLM Download → MCU
-# -----------------------------
 def plm_to_mcu_all_sheets(file) -> pd.DataFrame:
     """Read all sheets and transform into MCU format."""
     all_sheets = pd.read_excel(file, sheet_name=None)  # read all sheets
@@ -15,20 +12,26 @@ def plm_to_mcu_all_sheets(file) -> pd.DataFrame:
 
     for sheet_name, df in all_sheets.items():
         df = df.copy()
+
+        # Strip column names to remove hidden spaces
         df.columns = df.columns.str.strip()
 
-        # Columns to keep
-        keep_cols = [
+        # All metadata columns we care about
+        desired_cols = [
             'Season','Style','BOM','Cycle','Article','Type of Const 1','Supplier',
             'UOM','Composition','Measurement','Supplier Country','Avg YY'
         ]
 
-        # Dynamically detect month columns
+        # Keep only columns that exist in the dataframe
+        keep_cols = [c for c in desired_cols if c in df.columns]
+
+        # Dynamically detect month columns: columns containing '-' and not starting with 'Sum'
         month_cols = [c for c in df.columns if '-' in c and not c.lower().startswith('sum')]
 
+        # Select relevant columns
         df_mcu = df[keep_cols + month_cols]
 
-        # Add 'Sheet Names' column
+        # Add 'Sheet Names' column at the front
         df_mcu.insert(0, 'Sheet Names', 'Fabrics')
 
         mcu_list.append(df_mcu)
