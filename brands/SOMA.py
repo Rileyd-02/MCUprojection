@@ -6,35 +6,47 @@ from utils import excel_to_bytes
 name = "SOMA"
 
 def plm_to_mcu_all_sheets(file) -> pd.DataFrame:
-    """Read all sheets and transform into MCU format with months included."""
+    """Read all sheets and transform into MCU format with all months filled."""
     all_sheets = pd.read_excel(file, sheet_name=None)  # read all sheets
     mcu_list = []
+    all_months_set = set()
 
+    # First pass: collect all month columns across all sheets
     for sheet_name, df in all_sheets.items():
         df = df.copy()
+        df.columns = df.columns.str.strip()
+        month_cols = [c for c in df.columns if '-' in c and not c.lower().startswith('sum')]
+        all_months_set.update(month_cols)
 
-        # Strip column names to remove hidden spaces
+    # Sort all months chronologically
+    parsed_months = pd.to_datetime(list(all_months_set), format="%b-%y", errors="coerce")
+    all_months_sorted = [c for _, c in sorted(zip(parsed_months, all_months_set)) if not pd.isna(_)]
+
+    # Second pass: process sheets and align month columns
+    for sheet_name, df in all_sheets.items():
+        df = df.copy()
         df.columns = df.columns.str.strip()
 
-        # All metadata columns we care about
+        # Metadata columns
         desired_cols = [
             'Season','Style','BOM','Cycle','Article','Type of Const 1','Supplier',
             'UOM','Composition','Measurement','Supplier Country','Avg YY'
         ]
         keep_cols = [c for c in desired_cols if c in df.columns]
 
-        # Dynamically detect month columns: contains '-' and not starting with 'Sum'
+        # Month columns in this sheet
         month_cols = [c for c in df.columns if '-' in c and not c.lower().startswith('sum')]
 
-        # Sort month columns chronologically
-        if month_cols:
-            parsed_months = pd.to_datetime(month_cols, format="%b-%y", errors="coerce")
-            month_cols_sorted = [c for _, c in sorted(zip(parsed_months, month_cols)) if not pd.isna(_)]
-        else:
-            month_cols_sorted = []
+        # Keep metadata + month columns
+        df_mcu = df[keep_cols + month_cols]
 
-        # Select metadata + sorted month columns
-        df_mcu = df[keep_cols + month_cols_sorted]
+        # Add missing month columns with 0
+        for m in all_months_sorted:
+            if m not in df_mcu.columns:
+                df_mcu[m] = 0
+
+        # Reorder columns: metadata first, then months
+        df_mcu = df_mcu[keep_cols + all_months_sorted]
 
         # Add 'Sheet Names' column at the front
         df_mcu.insert(0, 'Sheet Names', 'Fabrics')
