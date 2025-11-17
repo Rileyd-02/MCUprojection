@@ -6,7 +6,7 @@ from utils import excel_to_bytes
 name = "SOMA"
 
 def plm_to_mcu_all_sheets(file) -> pd.DataFrame:
-    """Read all sheets and transform into MCU format."""
+    """Read all sheets and transform into MCU format with months included."""
     all_sheets = pd.read_excel(file, sheet_name=None)  # read all sheets
     mcu_list = []
 
@@ -21,15 +21,20 @@ def plm_to_mcu_all_sheets(file) -> pd.DataFrame:
             'Season','Style','BOM','Cycle','Article','Type of Const 1','Supplier',
             'UOM','Composition','Measurement','Supplier Country','Avg YY'
         ]
-
-        # Keep only columns that exist in the dataframe
         keep_cols = [c for c in desired_cols if c in df.columns]
 
-        # Dynamically detect month columns: columns containing '-' and not starting with 'Sum'
+        # Dynamically detect month columns: contains '-' and not starting with 'Sum'
         month_cols = [c for c in df.columns if '-' in c and not c.lower().startswith('sum')]
 
-        # Select relevant columns
-        df_mcu = df[keep_cols + month_cols]
+        # Sort month columns chronologically
+        if month_cols:
+            parsed_months = pd.to_datetime(month_cols, format="%b-%y", errors="coerce")
+            month_cols_sorted = [c for _, c in sorted(zip(parsed_months, month_cols)) if not pd.isna(_)]
+        else:
+            month_cols_sorted = []
+
+        # Select metadata + sorted month columns
+        df_mcu = df[keep_cols + month_cols_sorted]
 
         # Add 'Sheet Names' column at the front
         df_mcu.insert(0, 'Sheet Names', 'Fabrics')
@@ -49,6 +54,9 @@ def render():
     if plm_file:
         try:
             df_out = plm_to_mcu_all_sheets(plm_file)
+            if df_out.empty:
+                st.warning("⚠️ No valid rows found in the PLM Download file.")
+                return
             st.subheader("Preview — MCU Format")
             st.dataframe(df_out.head())
             out_bytes = excel_to_bytes(df_out)
