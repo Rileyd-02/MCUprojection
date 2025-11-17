@@ -1,97 +1,104 @@
 # brands/tommy_eu.py
 import streamlit as st
 import pandas as pd
-from utils import excel_to_bytes
+from io import BytesIO
 
 name = "Tommy EU"
 
-# -----------------------------
-# Transformations
-# -----------------------------
+# ---------- Helper function to convert DataFrame to Excel bytes ----------
+def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    output.seek(0)
+    return output
 
+# ---------- Transformation 1: Buy Sheet → PLM Upload ----------
 def buy_to_plm(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert Tommy EU Buy Sheet → PLM Upload format
-    - Skip second row (PO Proposal)
-    - Use row 3 as actual column names
-    - Pivot month columns into PLM upload
+    - Skip first 2 rows (description + PO Proposal)
+    - Use third row (index 2) as actual column names
+    - Keep Style column and month columns
     """
-    # Skip second row (PO Proposal)
-    df = df.drop(index=1).reset_index(drop=True)
-    
-    # Reset columns from third row (index 2)
-    df.columns = df.iloc[0]
-    df = df.drop(index=0).reset_index(drop=True)
-    
-    # Strip column names
-    df.columns = df.columns.str.strip()
-    
-    # Identify style column
+    # Ensure all values are string
+    df = df.astype(str)
+
+    # Drop first 2 rows
+    df = df.drop([0, 1]).reset_index(drop=True)
+
+    # Set third row as header
+    new_header = df.iloc[0].astype(str).str.strip()  # row 2
+    df = df[1:].copy()
+    df.columns = new_header
+    df = df.reset_index(drop=True)
+
+    # Identify Style column
     style_col_candidates = ["U_OPTIONTYPE (txt)|Buy (YYYYMMDD)", "Generic Article", "Style Description"]
     style_col = next((c for c in style_col_candidates if c in df.columns), df.columns[0])
-    
+
     # Month columns start after style_col
     month_idx = df.columns.get_loc(style_col) + 1
     month_cols = df.columns[month_idx:]
-    
+
+    # Keep only style + months
     plm_df = df[[style_col] + list(month_cols)].copy()
     plm_df = plm_df.rename(columns={style_col: "Style number"})
+
+    # Ensure month columns are numeric
+    for col in month_cols:
+        plm_df[col] = pd.to_numeric(plm_df[col].str.replace(",", ""), errors="coerce").fillna(0)
+
     return plm_df
 
+# ---------- Transformation 2: PLM Download → MCU ----------
 def plm_to_mcu(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert Tommy EU PLM Download → MCU Format
-    - Keeps metadata columns
-    - Month columns pivoted into MCU months
+    - Removes any 'Sum of' duplicate columns
+    - Keeps month columns for MCU
     """
     df.columns = df.columns.str.strip()
-    
-    # Drop "Sum of" columns if present
-    month_cols = [c for c in df.columns if not c.lower().startswith("sum")]
-    
-    # Metadata to keep
-    meta_cols = ["Style", "BOM", "Cycle", "Article", "Type of Const 1",
-                 "Supplier", "UOM", "Composition", "Measurement", "Supplier Country", "Avg YY"]
-    meta_cols = [c for c in meta_cols if c in df.columns]
-    
-    pivot_df = df[meta_cols + month_cols].copy()
-    
-    # Ensure month columns are in order: Jul → Jun
-    month_order = ["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"]
-    existing_months = [m for m in month_order if m in pivot_df.columns]
-    pivot_df = pivot_df[meta_cols + existing_months]
-    
-    return pivot_df
+    # Drop duplicate 'Sum of' columns if present
+    mask_keep = ~df.columns.str.lower().str.startswith("sum")
+    df = df.loc[:, mask_keep]
+    return df
 
-# -----------------------------
-# Streamlit UI
-# -----------------------------
+# ---------- Streamlit UI ----------
 def render():
     st.header("Tommy EU — Buy Sheet → PLM Upload")
-
-    buy_file = st.file_uploader("Upload Tommy EU Buy Sheet", type=["xlsx","xls"], key="tommy_buy")
+    buy_file = st.file_uploader("Upload Tommy EU Buy Sheet", type=["xlsx", "xls"], key="tommy_buy")
     if buy_file:
         try:
-            df = pd.read_excel(buy_file, header=None)
-            plm_upload = buy_to_plm(df)
+            df = pd.read_excel(buy_file, header=None)  # read all rows as-is
+            plm_df = buy_to_plm(df)
             st.subheader("Preview — PLM Upload")
-            st.dataframe(plm_upload.head())
-            out_bytes = excel_to_bytes(plm_upload)
-            st.download_button("📥 Download PLM Upload", out_bytes, file_name="PLM_Upload_TommyEU.xlsx")
+            st.dataframe(plm_df.head())
+            out_bytes = excel_to_bytes(plm_df)
+            st.download_button(
+                "📥 Download PLM Upload",
+                out_bytes,
+                file_name="PLM_Upload_Tommy_EU.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         except Exception as e:
             st.error(f"❌ Error processing Buy Sheet: {e}")
 
     st.markdown("---")
-    st.header("Tommy EU — PLM Download → MCU Format")
-
-    plm_file = st.file_uploader("Upload Tommy EU PLM Download", type=["xlsx","xls"], key="tommy_plm")
+    st.header("Tommy EU — PLM Download → MCU")
+    plm_file = st.file_uploader("Upload Tommy EU PLM Download", type=["xlsx", "xls"], key="tommy_plm")
     if plm_file:
         try:
-            df = pd.read_excel(plm_file, header=0)
+            df = pd.read_excel(plm_file)
             mcu_df = plm_to_mcu(df)
             st.subheader("Preview — MCU Format")
             st.dataframe(mcu_df.head())
             out_bytes = excel_to_bytes(mcu_df)
-            st.download_button("📥 Download MCU", out_bytes, file_name="MCU_TommyEU.xlsx")
+            st.download_button(
+                "📥 Download MCU",
+                out_bytes,
+                file_name="MCU_Tommy_EU.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         except Exception as e:
             st.error(f"❌ Error processing PLM Download: {e}")
