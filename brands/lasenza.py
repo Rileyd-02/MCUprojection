@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from utils import excel_to_bytes
 
-name = "La Senza"
+name = "La Senza - Bucket 02"
 
 # -----------------------------
 # 1. BUY SHEET -> PLM UPLOAD
@@ -122,4 +122,5 @@ def render():
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         except Exception as e:
+
             st.error(f"❌ Error processing PLM Download file: {e}")
