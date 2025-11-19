@@ -3,7 +3,7 @@ import pandas as pd
 from utils import excel_to_bytes
 
 # Brand name for sidebar
-name = "DBI"
+name = "DBI - Bucket 02"
 
 # Base columns expected in the PLM download
 REQUIRED_COLS = [
@@ -23,6 +23,7 @@ REQUIRED_COLS = [
 
 def transform_plm_to_mcu(df):
     """Transforms PLM Download → Final MCU format for DBI."""
+    "Get the initial PLM Download transformation from the shared folder"
 
     # Clean column names
     df.columns = df.columns.str.strip()
@@ -84,3 +85,4 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error processing PLM Download file: {e}")
+
