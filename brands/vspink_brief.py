@@ -4,7 +4,7 @@ import pandas as pd
 from io import BytesIO
 
 # Display name in sidebar
-name = "VSPink Brief"
+name = "VSPink Brief - Bucket 03"
 
 def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     output = BytesIO()
@@ -142,3 +142,4 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error processing VSPink Brief file: {e}")
+
