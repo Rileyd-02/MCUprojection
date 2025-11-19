@@ -3,7 +3,7 @@ import pandas as pd
 from utils import excel_to_bytes
 
 # Brand name for sidebar
-name = "M&S"
+name = "M&S - Bucket 03"
 
 # Base columns expected in the PLM download
 REQUIRED_COLS = [
@@ -83,3 +83,4 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error processing PLM Download file: {e}")
+
