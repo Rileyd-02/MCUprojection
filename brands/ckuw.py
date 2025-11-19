@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-name = "CKUW"  # <-- this is what appears in the sidebar
+name = "CKUW - Bucket 01"  
 
 def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     """Convert DataFrame to downloadable Excel bytes."""
@@ -40,3 +40,4 @@ def render():
             )
         except Exception as e:
             st.error(f"Error processing CKUW file: {e}")
+
