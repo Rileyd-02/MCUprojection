@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from utils import excel_to_bytes
 
-name = "SOMA"
+name = "SOMA - Bucket 02"
 
 def plm_to_mcu_all_sheets(file) -> pd.DataFrame:
     """Read all sheets and transform into MCU format with all months filled."""
@@ -80,3 +80,4 @@ def render():
             )
         except Exception as e:
             st.error(f"❌ Error processing PLM Download file: {e}")
+
