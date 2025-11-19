@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-name = "Pink Bra"
+name = "Pink Bra - Bucket 01"
 
 # -------------------------
 # Helpers
@@ -230,3 +230,4 @@ def render():
 
     except Exception as e:
         st.error(f"❌ Error: {e}")
+
