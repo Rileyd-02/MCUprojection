@@ -5,7 +5,7 @@ from io import BytesIO
 from dateutil.relativedelta import relativedelta
 
 # Display name in sidebar
-name = "VSPink Apparel"
+name = "VSPink Apparel - Bucket 03"
 
 # ----------------------------
 # Helper utilities
@@ -118,3 +118,4 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error processing VSPink Apparel file: {e}")
+
