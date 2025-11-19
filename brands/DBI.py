@@ -1,84 +1,86 @@
 import streamlit as st
 import pandas as pd
-import re
+from utils import excel_to_bytes
 
-st.set_page_config(page_title="DBI – PLM to MCU", page_icon="📄")
+# Brand name for sidebar
+name = "DBI"
 
-st.title("📄 DBI – PLM Download to MCU Format Converter")
+# Base columns expected in the PLM download
+REQUIRED_COLS = [
+    "Season",
+    "Style",
+    "BOM",
+    "Cycle",
+    "Article",
+    "Type of Const 1",
+    "Supplier",
+    "UOM",
+    "Composition",
+    "Measurement",
+    "Supplier Country",
+    "Avg YY",
+]
 
-
-# --------------------------------------------------------
-# FUNCTION: TRANSFORM PLM → MCU FORMAT
-# --------------------------------------------------------
 def transform_plm_to_mcu(df):
+    """Transforms PLM Download → Final MCU format for DBI."""
 
-    # 1. REMOVE COLUMNS STARTING WITH "SUM"
-    df = df.loc[:, ~df.columns.str.lower().str.startswith("sum")]
+    # Clean column names
+    df.columns = df.columns.str.strip()
 
-    # 2. DYNAMICALLY DETECT MONTH COLUMNS USING REGEX  
-    month_pattern = r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[-_ ]?\d{0,4}$"
-    month_cols = [c for c in df.columns if re.match(month_pattern, c.lower())]
+    # Remove SUM columns
+    df = df[[c for c in df.columns if not c.lower().startswith("sum")]]
 
-    # 3. NORMALIZE MONTH NAMES (jan24 → Jan, jan_2024 → Jan)
-    clean_months = {}
-    for col in month_cols:
-        c = col.lower().replace("-", "").replace("_", "")
-        month = c[:3].title()  # Jan, Feb, Mar...
-        clean_months[col] = month
+    # Detect dynamic month columns (Nov-25, Dec-25, etc.)
+    month_cols = [c for c in df.columns if "-" in c]
 
-    df = df.rename(columns=clean_months)
+    # Validate required columns
+    missing = [c for c in REQUIRED_COLS if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
 
-    # 4. MASTER MCU MONTH LIST
-    all_months = ["Jan","Feb","Mar","Apr","May","Jun",
-                  "Jul","Aug","Sep","Oct","Nov","Dec"]
+    # Keep required columns + detected months
+    df_out = df[
+        ["Season", "Style", "BOM", "Cycle", "Article", "Type of Const 1",
+         "Supplier", "UOM", "Composition", "Measurement",
+         "Supplier Country", "Avg YY"] + month_cols
+    ]
 
-    # 5. ADD MISSING MONTHS WITH 0
-    for m in all_months:
-        if m not in df.columns:
-            df[m] = 0
+    # Insert sheet name column
+    df_out.insert(0, "Sheet Names", "Fabrics")
 
-    # 6. REORDER COLUMNS (KEEP ALL NON-MONTH COLUMNS FIRST)
-    fixed_cols = [c for c in df.columns if c not in all_months]
-    df = df[fixed_cols + all_months]
+    # Fill empty month values with zero
+    df_out[month_cols] = df_out[month_cols].fillna(0)
 
-    return df
-
-
-# --------------------------------------------------------
-# FILE UPLOAD SECTION
-# --------------------------------------------------------
-uploaded_file = st.file_uploader("Upload DBI PLM Download File", type=["xlsx", "xls"])
+    return df_out
 
 
-# --------------------------------------------------------
-# PROCESS FILE
-# --------------------------------------------------------
-if uploaded_file is not None:
-    try:
-        df_plm = pd.read_excel(uploaded_file)
+# --------------------
+# STREAMLIT UI
+# --------------------
+def render():
+    st.header("DBI — PLM Download → MCU Format")
 
-        st.subheader("📥 Raw PLM Download Preview")
-        st.dataframe(df_plm.head())
+    uploaded_file = st.file_uploader(
+        "Upload DBI PLM Download File",
+        type=["xlsx", "xls"],
+        key="dbi_plm"
+    )
 
-        # APPLY TRANSFORMATION
-        df_mcu = transform_plm_to_mcu(df_plm)
+    if uploaded_file:
+        try:
+            df = pd.read_excel(uploaded_file)
+            df_final = transform_plm_to_mcu(df)
 
-        st.subheader("📤 Transformed MCU Format")
-        st.dataframe(df_mcu)
+            st.subheader("Preview — MCU Format")
+            st.dataframe(df_final.head())
 
-        # DOWNLOAD BUTTON
-        output_file = "DBI_MCU_Format.xlsx"
-        df_mcu.to_excel(output_file, index=False)
+            output = excel_to_bytes(df_final)
 
-        with open(output_file, "rb") as f:
             st.download_button(
-                label="⬇ Download MCU Format (Excel)",
-                data=f,
-                file_name=output_file,
-                mime="application/octet-stream"
+                "📥 Download MCU Format",
+                output,
+                file_name="MCU_DBI.xlsx"
             )
 
-        st.success("✔ DBI MCU File Successfully Generated!")
-
-    except Exception as e:
-        st.error(f"❌ Error processing DBI PLM file: {e}")
+        except Exception as e:
+            st.error(f"❌ Error processing PLM Download file: {e}")
