@@ -3,7 +3,7 @@ import pandas as pd
 from utils import excel_to_bytes
 
 # Brand name for sidebar
-name = "TH Apparel"
+name = "TH Apparel - Bucket 02"
 
 # Required base columns (always kept)
 REQUIRED_COLS = [
@@ -73,3 +73,4 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error processing PLM Download file: {e}")
+
