@@ -5,56 +5,25 @@ from utils import excel_to_bytes
 # Brand name for sidebar
 name = "M&S - Bucket 03"
 
-# Base required PLM columns
-REQUIRED_COLS = [
-    "Season",
-    "Style",
-    "BOM",
-    "Cycle",
-    "Article",
-    "Type of Const 1",
-    "Supplier",
-    "UOM",
-    "Composition",
-    "Measurement",
-    "Supplier Country",
-    "Avg YY",
-]
-
 # -------------------------------------------------------
 #   TRANSFORMATION: PLM Download  →  MCU Format
 # -------------------------------------------------------
-def transform_plm_to_mcu(df):
-    """Transforms PLM Download → MCU format for M&S."""
+def transform_ms_plm_to_mcu(df):
+    """M&S PLM → MCU with HugoBoss-style logic."""
 
-    # Clean header names
+    # Clean column names
     df.columns = df.columns.str.strip()
 
-    # Remove SUM columns
-    df = df[[c for c in df.columns if not c.lower().startswith("sum")]]
+    # Drop all columns starting with "sum"
+    mask_keep = ~df.columns.str.lower().str.startswith("sum")
+    df = df.loc[:, mask_keep]
 
-    # Detect month columns dynamically (columns containing "-")
-    month_cols = [c for c in df.columns if "-" in c]
+    # (Optional) fill month values with 0
+    # Only if they are numeric months like Nov, Dec, Jan...
+    month_cols = [c for c in df.columns if "-" in c or c[:3].isalpha()]
+    df[month_cols] = df[month_cols].fillna(0)
 
-    # Validate missing columns
-    missing = [col for col in REQUIRED_COLS if col not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required PLM columns: {missing}")
-
-    # Extract required columns + months
-    df_out = df[
-        ["Season", "Style", "BOM", "Cycle", "Article", "Type of Const 1",
-         "Supplier", "UOM", "Composition", "Measurement",
-         "Supplier Country", "Avg YY"] + month_cols
-    ]
-
-    # Insert sheet name as first column
-    df_out.insert(0, "Sheet Names", "Fabrics")
-
-    # Fill missing month values with 0
-    df_out[month_cols] = df_out[month_cols].fillna(0)
-
-    return df_out
+    return df
 
 
 # -------------------------------------------------------
@@ -64,8 +33,8 @@ def render():
     st.header("M&S — PLM Download → MCU Format")
 
     uploaded_file = st.file_uploader(
-        "Upload M&S PLM Download File", 
-        type=["xlsx", "xls"], 
+        "Upload M&S PLM Download File",
+        type=["xlsx", "xls"],
         key="ms_plm"
     )
 
@@ -73,19 +42,19 @@ def render():
         try:
             df = pd.read_excel(uploaded_file)
 
-            # Transform file
-            df_final = transform_plm_to_mcu(df)
+            # Transform using HugoBoss-style MCU logic
+            df_final = transform_ms_plm_to_mcu(df)
 
             st.subheader("Preview — MCU Format")
             st.dataframe(df_final.head())
 
-            output = excel_to_bytes(df_final)
+            out_bytes = excel_to_bytes(df_final)
 
             st.download_button(
                 "📥 Download MCU Format",
-                output,
+                out_bytes,
                 file_name="MCU_M&S.xlsx"
             )
 
         except Exception as e:
-            st.error(f"❌ Error processing PLM Download file: {e}")
+            st.error(f"❌ Error processing M&S PLM file: {e}")
