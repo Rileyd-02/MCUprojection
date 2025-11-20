@@ -58,8 +58,10 @@ if choice == "🏠 Home":
     st.markdown(
         """
         Welcome to the **MCU Projection Tool** 👋  
-        Use the sidebar to select a brand account.  
-        You can use the same brand accounts which uses the same logic. 
+        Use the sidebar to select a brand account.
+        Brands have been labeled according to the bucket.
+        Use NDC Tab to back calculate NDC Dates.
+        When uploading make sure brands format standards are met. 
         """
     )
 else:
@@ -68,4 +70,5 @@ else:
         if mod.name == choice:
             mod.render()
             break
+
 
