@@ -5,58 +5,35 @@ from utils import excel_to_bytes
 # Brand name for sidebar
 name = "DBI - Bucket 02"
 
-# Base columns expected in the PLM download
-REQUIRED_COLS = [
-    "Season",
-    "Style",
-    "BOM",
-    "Cycle",
-    "Article",
-    "Type of Const 1",
-    "Supplier",
-    "UOM",
-    "Composition",
-    "Measurement",
-    "Supplier Country",
-    "Avg YY",
-]
-
-def transform_plm_to_mcu(df):
-    """Transforms PLM Download → Final MCU format for DBI."""
+# -------------------------------------------------------
+#   TRANSFORMATION: PLM Download  →  MCU Format
+# -------------------------------------------------------
+def transform_dbi_plm_to_mcu(df):
+    """DBI PLM → MCU using simplified HugoBoss logic."""
 
     # Clean column names
     df.columns = df.columns.str.strip()
 
-    # Remove SUM columns
-    df = df[[c for c in df.columns if not c.lower().startswith("sum")]]
+    # Drop SUM columns
+    mask_keep = ~df.columns.str.lower().str.startswith("sum")
+    df = df.loc[:, mask_keep]
 
-    # Detect dynamic month columns (Nov-25, Dec-25, etc.)
-    month_cols = [c for c in df.columns if "-" in c]
-
-    # Validate required columns
-    missing = [c for c in REQUIRED_COLS if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
-
-    # Keep required columns + detected months
-    df_out = df[
-        ["Season", "Style", "BOM", "Cycle", "Article", "Type of Const 1",
-         "Supplier", "UOM", "Composition", "Measurement",
-         "Supplier Country", "Avg YY"] + month_cols
+    # Detect month columns (Nov, Dec, Jan, Feb, etc.)
+    month_cols = [
+        c for c in df.columns
+        if "-" in c or c[:3].isalpha()
     ]
 
-    # Insert sheet name column
-    df_out.insert(0, "Sheet Names", "Fabrics")
+    # Fill missing month values with 0
+    if month_cols:
+        df[month_cols] = df[month_cols].fillna(0)
 
-    # Fill empty month values with zero
-    df_out[month_cols] = df_out[month_cols].fillna(0)
-
-    return df_out
+    return df
 
 
-# --------------------
-# STREAMLIT UI
-# --------------------
+# -------------------------------------------------------
+#                       STREAMLIT UI
+# -------------------------------------------------------
 def render():
     st.header("DBI — PLM Download → MCU Format")
 
@@ -69,13 +46,14 @@ def render():
     if uploaded_file:
         try:
             df = pd.read_excel(uploaded_file)
-            df_final = transform_plm_to_mcu(df)
 
-            st.subheader("Preview — MCU Format")
-            st.dataframe(df_final.head())
+            # Apply HugoBoss-style transformation
+            df_out = transform_dbi_plm_to_mcu(df)
 
-            output = excel_to_bytes(df_final)
+            st.subheader("Preview — MCU Output")
+            st.dataframe(df_out.head())
 
+            output = excel_to_bytes(df_out)
             st.download_button(
                 "📥 Download MCU Format",
                 output,
@@ -84,6 +62,3 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error processing PLM Download file: {e}")
-
-
-
