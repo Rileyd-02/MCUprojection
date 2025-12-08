@@ -63,13 +63,13 @@ if choice == "🏠 Home":
         Use NDC Tab to back calculate NDC Dates.
         When uploading make sure brands format standards are met.
 
-        Bucket 01 - Upload the Buy Sheet, the file will get transformed into month columns and place Qty into the corresponding month column.
+        **Bucket 01 -** Upload the Buy Sheet, the file will get transformed into month columns and place Qty into the corresponding month column.
 
-        Bucket 02 - Upload Buy Sheet to the first section and get the PLM upload file, once the PLM upload file is ready use it on PLM to get the download and reupload it on the second section to get MCU format.
+        **Bucket 02 -** Upload Buy Sheet to the first section and get the PLM upload file, once the PLM upload file is ready use it on PLM to get the download and reupload it on the second section to get MCU format.
 
-        Bucket 03 - Brands that already use PLM can directly uplaod the PLM download file to get the MCU format using the upload section.
+        **Bucket 03 -** Brands that already use PLM can directly uplaod the PLM download file to get the MCU format using the upload section.
 
-        NDC - Upload MCU foramt to back calculate NDC dates using supplier COO.
+        **NDC -** Upload MCU foramt to back calculate NDC dates using supplier COO.
         
         """
     )
@@ -79,6 +79,7 @@ else:
         if mod.name == choice:
             mod.render()
             break
+
 
 
 
