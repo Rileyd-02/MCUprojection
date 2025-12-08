@@ -61,7 +61,12 @@ if choice == "🏠 Home":
         Use the sidebar to select a brand account.
         Brands have been labeled according to the bucket.
         Use NDC Tab to back calculate NDC Dates.
-        When uploading make sure brands format standards are met. 
+        When uploading make sure brands format standards are met.
+
+        Bucket 01 - Upload the Buy Sheet, the file will get transformed into month columns and place Qty into the corresponding month column.
+
+        Bucket 02 - Upload Buy Sheet to the first section and get the PLM upload file, once the PLM upload file is ready use it on PLM to get the download and reupload it on the second section to get MCU format
+        
         """
     )
 else:
@@ -70,5 +75,6 @@ else:
         if mod.name == choice:
             mod.render()
             break
+
 
 
