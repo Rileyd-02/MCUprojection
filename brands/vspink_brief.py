@@ -39,7 +39,7 @@ def detect_column(df, keywords):
 def transform_vspink_brief(df: pd.DataFrame) -> pd.DataFrame:
     """
     Transform VSPink Brief Buy Sheet → MCU Format:
-    - EX-mill → Month label (e.g., Oct-25)
+    - EX-mill → Month label (e.g., Mar-26)
     - Pivot month columns with quantities
     - Preserve metadata columns
     """
@@ -63,7 +63,7 @@ def transform_vspink_brief(df: pd.DataFrame) -> pd.DataFrame:
     # Ensure Qty numeric
     df[qty_col] = pd.to_numeric(df[qty_col].astype(str).str.replace(",", "").str.strip(), errors="coerce").fillna(0)
 
-    # Create Month label from EX-mill date
+    # Create Month label from EX-mill date (no back-calculation)
     df["Month"] = df[exmill_col].dt.strftime("%b-%y")
 
     # Determine metadata columns (everything except Qty, EX-mill, Month)
