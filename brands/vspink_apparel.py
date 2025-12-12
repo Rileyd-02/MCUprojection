@@ -3,12 +3,15 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 from dateutil.relativedelta import relativedelta
-import unicodedata
-import re
 
+# Display name in sidebar
 name = "VSPink Apparel - Bucket 03"
 
+# ----------------------------
+# Helper utilities
+# ----------------------------
 def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
+    """Convert DataFrame to downloadable Excel bytes."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
@@ -16,48 +19,58 @@ def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     return output
 
 def clean_columns(df):
-    """Fully sanitize all column names."""
-    new_cols = {}
+    """Fix hidden spaces and normalize column names"""
+    cleaned = {}
     for c in df.columns:
-        col = unicodedata.normalize("NFKC", str(c))
-        col = col.replace("–", "-").replace("—", "-")
-        col = re.sub(r"\s+", " ", col).strip()
-        new_cols[c] = col
-    df.rename(columns=new_cols, inplace=True)
+        new_c = (
+            str(c)
+            .replace("\xa0", " ")
+            .replace("–", "-")
+            .replace("—", "-")
+            .strip()
+        )
+        cleaned[c] = new_c
+    df.rename(columns=cleaned, inplace=True)
     return df
 
+# ----------------------------
+# Transformation
+# ----------------------------
 def transform_vspink_apparel(file) -> pd.DataFrame:
-    df = pd.read_excel(file, header=0)
+    """Transform VSPink Apparel Buy Sheet → MCU Format"""
 
-    # DEBUG → show raw headers
-    st.write("🔍 Raw Columns Loaded:", list(df.columns))
+    # Read Excel using the correct header row (second row, index=1)
+    df = pd.read_excel(file, header=1)
 
-    if df.iloc[0].isna().all():
-        df = df.iloc[1:].copy()
-
+    # Clean column names
     df = clean_columns(df)
 
-    REQUIRED = ["Customer", "Supplier", "Supplier COO", "Program", "Article", "Qty (m)", "EX-mill"]
-    for col in REQUIRED:
+    # Detect required columns
+    required_cols = ["Customer", "Supplier", "Supplier COO", "Program", "Article", "Qty (m)", "EX-mill"]
+    for col in required_cols:
         if col not in df.columns:
-            raise ValueError(f"❌ Required column missing: {col}")
+            raise ValueError(f"❌ Required column missing: {col}. Columns detected: {list(df.columns)}")
 
+    # Parse EX-mill dates
     df["EX-mill"] = pd.to_datetime(df["EX-mill"], errors="coerce")
     df = df.dropna(subset=["EX-mill", "Article"])
+    if df.empty:
+        raise ValueError("❌ No valid rows found after EX-mill + Article filtering.")
 
+    # Determine sourcing type
     df["Sourcing Type"] = df["Supplier COO"].apply(lambda x: "LOCAL" if str(x).strip().upper() == "SL" else "FOREIGN")
 
+    # Back-calc MCU Month
     def compute_mcu_date(row):
-        if row["Sourcing Type"] == "LOCAL":
-            return row["EX-mill"] - relativedelta(months=3)
-        else:
-            return row["EX-mill"] - relativedelta(months=4)
+        return row["EX-mill"] - relativedelta(months=3 if row["Sourcing Type"] == "LOCAL" else 4)
 
-    df["MCU Month"] = df.apply(compute_mcu_date, axis=1).dt.strftime("%b-%y")
+    df["MCU Month"] = df.apply(compute_mcu_date, axis=1)
+    df["MCU Month"] = df["MCU Month"].dt.strftime("%b-%y")  # e.g., Aug-25
 
-    output_cols = ["Customer", "Supplier", "Supplier COO", "Program", "Article", "Qty (m)", "EX-mill", "MCU Month"]
-    final_df = df[output_cols]
+    # Prepare final MCU output
+    final_df = df[["Customer", "Supplier", "Supplier COO", "Program", "Article", "Qty (m)", "EX-mill", "MCU Month"]]
 
+    # Pivot to get one row per style and month columns as quantities
     pivot_df = final_df.pivot_table(
         index=["Customer", "Supplier", "Supplier COO", "Program", "Article"],
         columns="MCU Month",
@@ -66,11 +79,15 @@ def transform_vspink_apparel(file) -> pd.DataFrame:
         fill_value=0
     ).reset_index()
 
+    # Flatten pivoted columns
     pivot_df.columns.name = None
     pivot_df.columns = [str(c) for c in pivot_df.columns]
 
     return pivot_df
 
+# ----------------------------
+# Streamlit Page
+# ----------------------------
 def render():
     st.header("VSPink Apparel — Buy Sheet → MCU Format")
 
@@ -83,6 +100,9 @@ def render():
     if uploaded:
         try:
             df_out = transform_vspink_apparel(uploaded)
+            if df_out.empty:
+                st.warning("No valid rows found after transformation.")
+                return
 
             st.subheader("📄 Preview Transformed MCU")
             st.dataframe(df_out.head())
