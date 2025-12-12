@@ -48,10 +48,7 @@ def transform_vs_bra(file) -> pd.DataFrame:
     if hasattr(file, "read") and getattr(file, "name", "").lower().endswith(".csv"):
         df = pd.read_csv(file)
     else:
-        df = pd.read_excel(file, header=0)
-        # If all columns are Unnamed, skip first row
-        if df.columns.str.contains("Unnamed").all():
-            df = pd.read_excel(file, header=1)
+        df = pd.read_excel(file, header=0)  # First row is header
 
     df = clean_columns(df)
 
