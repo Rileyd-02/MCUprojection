@@ -3,9 +3,11 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-# Display name in sidebar
 name = "VSPink Brief - Bucket 03"
 
+# -------------------------
+# Utilities
+# -------------------------
 def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -13,99 +15,81 @@ def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     output.seek(0)
     return output
 
-def transform_vspink_brief(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Transform VSPink Brief Buy Sheet → MCU Format.
-    - Converts EX-mill to datetime and to Month label (e.g. "Oct-25")
-    - Ensures Qty (m) is numeric
-    - Pivots so each Month becomes a column with Qty sums
-    - Preserves other metadata columns (Customer, Supplier, Article, etc.)
-    """
+def clean_columns(df):
+    """Remove hidden characters, line breaks, normalize column names."""
+    cleaned = {}
+    for c in df.columns:
+        new_c = str(c).strip().replace("\n", " ").replace("\r", " ").replace("\xa0", " ")
+        cleaned[c] = new_c
+    df.rename(columns=cleaned, inplace=True)
+    return df
 
-    # normalize column names
-    df = df.copy()
-    df.columns = df.columns.str.strip().str.replace("\n", " ").str.replace("\r", " ")
-
-    # Detect key columns flexibly (case-insensitive)
+def detect_column(df, keywords):
+    """Detect column by keywords (case-insensitive)."""
     col_lower = {c.lower(): c for c in df.columns}
-    # required keys - try exact names then fall back to contains
-    def find_column(key_words):
-        for k in key_words:
-            if k in col_lower:
-                return col_lower[k]
-        # fallback: find first column containing any word
-        for col in df.columns:
-            low = col.lower()
-            for kw in key_words:
-                if kw in low:
-                    return col
-        return None
+    for kw in keywords:
+        if kw.lower() in col_lower:
+            return col_lower[kw.lower()]
+    # fallback: first column containing the keyword
+    for c in df.columns:
+        for kw in keywords:
+            if kw.lower() in str(c).lower():
+                return c
+    return None
 
-    article_col = find_column(["article"])
-    exmill_col = find_column(["ex-mill", "ex mill", "exmill"])
-    qty_col = find_column(["qty", "qty (m)", "qty (m)", "qty (m)".lower()])
+# -------------------------
+# Transformation
+# -------------------------
+def transform_vspink_brief(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df = clean_columns(df)
 
-    if article_col is None or exmill_col is None or qty_col is None:
-        raise ValueError("Could not detect required columns. Ensure file has 'Article', 'EX-mill' and 'Qty (m)' columns.")
+    # Detect key columns
+    article_col = detect_column(df, ["article"])
+    exmill_col = detect_column(df, ["ex-mill", "ex mill", "exmill"])
+    qty_col = detect_column(df, ["qty", "qty (m)"])
 
-    # Parse EX-mill -> datetime
+    if not article_col or not exmill_col or not qty_col:
+        raise ValueError(f"Could not detect required columns. Found: {list(df.columns)}")
+
+    # Convert EX-mill to datetime
     df[exmill_col] = pd.to_datetime(df[exmill_col], errors="coerce")
 
-    # Drop rows without a valid ex-mill date or without an article
+    # Drop rows without valid EX-mill or Article
     df = df.dropna(subset=[exmill_col, article_col])
-
     if df.empty:
-        # Nothing to transform
         return pd.DataFrame()
 
-    # Create Month label (e.g., Oct-25). Use consistent format.
+    # Create Month label
     df["Month"] = df[exmill_col].dt.strftime("%b-%y")
 
-    # Ensure Qty is numeric (remove commas / whitespace)
-    df[qty_col] = df[qty_col].astype(str).str.replace(",", "", regex=False).str.strip()
-    df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0)
+    # Convert Qty to numeric
+    df[qty_col] = pd.to_numeric(df[qty_col].astype(str).str.replace(",", "").str.strip(), errors="coerce").fillna(0)
 
-    # Decide metadata columns to preserve in the pivot index:
-    # keep all cols except Qty and EX-mill and Month (we'll pivot Month)
+    # Metadata columns
     meta_cols = [c for c in df.columns if c not in [qty_col, exmill_col, "Month"]]
+    if not meta_cols:
+        meta_cols = [article_col]
 
-    # Pivot: meta_cols as index, Month as columns, Qty as values
-    # If meta_cols is empty (unlikely), pivot only by article_col
-    if len(meta_cols) == 0:
-        index_cols = [article_col]
-    else:
-        index_cols = meta_cols
+    # Group and pivot
+    grouped = df.groupby(meta_cols + ["Month"], dropna=False, as_index=False)[qty_col].sum()
+    pivot_df = grouped.pivot_table(index=meta_cols, columns="Month", values=qty_col, fill_value=0).reset_index()
 
-    grouped = (
-        df.groupby(index_cols + ["Month"], dropna=False, as_index=False)[qty_col]
-          .sum()
-    )
-
-    pivot_df = grouped.pivot_table(
-        index=index_cols,
-        columns="Month",
-        values=qty_col,
-        aggfunc="sum",
-        fill_value=0
-    )
-
-    # Reset index so metadata are columns again
-    pivot_df = pivot_df.reset_index()
-
-    # Make sure month columns are sorted chronologically
-    month_cols = [c for c in pivot_df.columns if c not in index_cols]
+    # Sort month columns chronologically
+    month_cols = [c for c in pivot_df.columns if c not in meta_cols]
     if month_cols:
-        # parse month columns back to dates for sorting
         parsed = pd.to_datetime(month_cols, format="%b-%y", errors="coerce")
         order = [m for _, m in sorted(zip(parsed, month_cols))]
-        pivot_df = pivot_df[index_cols + order]
+        pivot_df = pivot_df[meta_cols + order]
 
-    # Flatten column names to simple strings (in case)
+    # Flatten columns
     pivot_df.columns = [str(c) for c in pivot_df.columns]
 
     return pivot_df
 
+# -------------------------
 # Streamlit UI
+# -------------------------
 def render():
     st.header("VSPink Brief — Buy Sheet → MCU Format")
 
@@ -113,11 +97,13 @@ def render():
 
     if uploaded:
         try:
-            # allow CSV as well for quick testing
             if str(uploaded).lower().endswith(".csv") or uploaded.type == "text/csv":
                 df = pd.read_csv(uploaded)
             else:
-                df = pd.read_excel(uploaded)
+                # Try header at row 0, then row 1 if first row is blank
+                df = pd.read_excel(uploaded, header=0)
+                if df.columns.str.contains("Unnamed").all():
+                    df = pd.read_excel(uploaded, header=1)
 
             st.subheader("📄 Input Preview")
             st.dataframe(df.head())
@@ -125,14 +111,13 @@ def render():
             transformed_df = transform_vspink_brief(df)
 
             if transformed_df.empty:
-                st.warning("No valid rows after parsing EX-mill dates or Article values.")
+                st.warning("No valid rows found after parsing EX-mill dates or Article values.")
                 return
 
             st.subheader("✅ Transformed Output")
             st.dataframe(transformed_df.head())
 
             out_bytes = excel_to_bytes(transformed_df, sheet_name="MCU")
-
             st.download_button(
                 label="📥 Download MCU - VSPink Brief.xlsx",
                 data=out_bytes,
@@ -142,4 +127,3 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error processing VSPink Brief file: {e}")
-
