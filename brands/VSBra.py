@@ -49,7 +49,7 @@ def transform_vs_bra(file) -> pd.DataFrame:
         df = pd.read_csv(file)
     else:
         df = pd.read_excel(file, header=0)
-        # Skip first row if all Unnamed
+        # If all columns are Unnamed, skip first row
         if df.columns.str.contains("Unnamed").all():
             df = pd.read_excel(file, header=1)
 
@@ -141,7 +141,9 @@ def transform_vs_bra(file) -> pd.DataFrame:
 # ----------------------------
 def render():
     st.header("VS Bra — Buy Sheet → MCU Format")
-    st.markdown("Upload the VS Bra buy sheet. The app will pivot the REQ. Ex-mill Date into month columns and place Qty into the corresponding month column.")
+    st.markdown(
+        "Upload the VS Bra buy sheet. The app will pivot the REQ. Ex-mill Date into month columns and place Qty into the corresponding month column."
+    )
 
     uploaded = st.file_uploader(
         "Upload VS Bra file (xlsx, xls, csv)",
