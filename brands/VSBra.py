@@ -5,9 +5,6 @@ from io import BytesIO
 
 name = "VS Bra - Bucket 01"
 
-# ----------------------------
-# Helper to generate Excel
-# ----------------------------
 def excel_to_bytes(df: pd.DataFrame, sheet_name="Sheet1"):
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -15,9 +12,6 @@ def excel_to_bytes(df: pd.DataFrame, sheet_name="Sheet1"):
     buffer.seek(0)
     return buffer
 
-# ----------------------------
-# Column cleaning
-# ----------------------------
 def clean_columns(df):
     new_cols = {}
     for c in df.columns:
@@ -32,7 +26,7 @@ def clean_columns(df):
     return df
 
 def detect_column(df, keywords):
-    """Detect column by keywords (case-insensitive, partial match)."""
+    """Detect column by keywords (case-insensitive)"""
     for c in df.columns:
         col_lower = str(c).lower()
         for kw in keywords:
@@ -40,36 +34,30 @@ def detect_column(df, keywords):
                 return c
     return None
 
-# ----------------------------
-# Transformation logic
-# ----------------------------
 def transform_vs_bra(file) -> pd.DataFrame:
-    # Load file (CSV or Excel)
-    if hasattr(file, "read") and getattr(file, "name", "").lower().endswith(".csv"):
-        df = pd.read_csv(file)
-    else:
-        df = pd.read_excel(file, header=0)  # First row is header
+    # 🔥 FIX — the uploaded file's REAL header is on row 1
+    df = pd.read_excel(file, header=1)
 
     df = clean_columns(df)
 
-    # Detect essential columns
-    vendor_col = detect_column(df, ["vendor", "supplier name"])
+    # Detect columns
+    vendor_col = detect_column(df, ["vendor"])
     category_col = detect_column(df, ["category"])
     dept_col = detect_column(df, ["dept code"])
     fs_col = detect_column(df, ["fs"])
     program_col = detect_column(df, ["program"])
     style_col = detect_column(df, ["style"])
     bs_col = detect_column(df, ["bs"])
-    coo_col = detect_column(df, ["coo", "coo code"])
+    coo_col = detect_column(df, ["coo"])
     supplier_col = detect_column(df, ["supplier"])
     article_col = detect_column(df, ["article"])
     measurement_col = detect_column(df, ["measurement"])
-    exmill_col = detect_column(df, ["req. ex-mill", "req ex mill", "ex-mill", "ex mill"])
-    qty_col = detect_column(df, ["requirement", "qty", "qty (m)"])
+    exmill_col = detect_column(df, ["ex-mill"])
+    qty_col = detect_column(df, ["requirement", "qty"])
 
-    # Validate required columns
+    # Validate
     missing = []
-    for col_name, col_value in [
+    for name, col in [
         ("Vendor", vendor_col),
         ("Category", category_col),
         ("Dept Code", dept_col),
@@ -82,38 +70,35 @@ def transform_vs_bra(file) -> pd.DataFrame:
         ("Article No.", article_col),
         ("Measurement", measurement_col),
         ("REQ. Ex-mill Date", exmill_col),
-        ("Requirement (M)", qty_col),
+        ("Requirement (M)", qty_col)
     ]:
-        if col_value is None:
-            missing.append(col_name)
-    if missing:
-        raise ValueError(f"❌ Missing required column(s): {', '.join(missing)}. Detected columns: {list(df.columns)}")
+        if col is None:
+            missing.append(name)
 
-    # Parse date
+    if missing:
+        raise ValueError(
+            f"❌ Missing required column(s): {', '.join(missing)}.\nDetected columns: {list(df.columns)}"
+        )
+
+    # Clean date
     df[exmill_col] = pd.to_datetime(df[exmill_col], errors="coerce")
     df = df.dropna(subset=[exmill_col, article_col])
-    if df.empty:
-        raise ValueError("No valid rows after parsing EX-mill dates or Article values.")
 
-    # Clean quantity
+    # Clean qty
     df[qty_col] = (
-        df[qty_col].astype(str)
-        .str.replace(",", "")
-        .str.strip()
+        df[qty_col].astype(str).str.replace(",", "").str.strip()
     )
     df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0)
     df = df[df[qty_col] != 0]
 
-    # Build Month label
+    # Month conversion
     df["MCU Month"] = df[exmill_col].dt.strftime("%b-%y")
 
-    # Identity columns
     identity_cols = [
         vendor_col, category_col, dept_col, fs_col, program_col,
         style_col, bs_col, coo_col, supplier_col, article_col, measurement_col
     ]
 
-    # Pivot
     pivot_df = df.pivot_table(
         index=identity_cols,
         columns="MCU Month",
@@ -124,23 +109,15 @@ def transform_vs_bra(file) -> pd.DataFrame:
 
     pivot_df.columns.name = None
 
-    # Sort month columns
     month_cols = [c for c in pivot_df.columns if c not in identity_cols]
-    if month_cols:
-        parsed = pd.to_datetime(month_cols, format="%b-%y", errors="coerce")
-        ordered = [m for _, m in sorted(zip(parsed, month_cols))]
-        pivot_df = pivot_df[identity_cols + ordered]
+    parsed = pd.to_datetime(month_cols, format="%b-%y", errors="coerce")
+    ordered = [m for _, m in sorted(zip(parsed, month_cols))]
+    pivot_df = pivot_df[identity_cols + ordered]
 
     return pivot_df
 
-# ----------------------------
-# Streamlit Page Rendering
-# ----------------------------
 def render():
     st.header("VS Bra — Buy Sheet → MCU Format")
-    st.markdown(
-        "Upload the VS Bra buy sheet. The app will pivot the REQ. Ex-mill Date into month columns and place Qty into the corresponding month column."
-    )
 
     uploaded = st.file_uploader(
         "Upload VS Bra file (xlsx, xls, csv)",
@@ -163,6 +140,5 @@ def render():
             file_name="MCU_VS_Bra.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
     except Exception as e:
         st.error(f"❌ Error processing VS Bra file: {e}")
