@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+from dateutil.relativedelta import relativedelta
 
 name = "VSPink Brief - Bucket 03"
 
@@ -37,6 +38,12 @@ def detect_column(df, keywords):
 # Transformation
 # -------------------------
 def transform_vspink_brief(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transform VSPink Brief Buy Sheet → MCU Format
+    - Converts EX-mill dates to Month columns (e.g., Oct-25, Nov-25)
+    - Pivots quantities under respective months
+    - Preserves metadata columns
+    """
     df = df.copy()
     df = clean_columns(df)
 
@@ -44,32 +51,38 @@ def transform_vspink_brief(df: pd.DataFrame) -> pd.DataFrame:
     article_col = detect_column(df, ["article"])
     exmill_col = detect_column(df, ["ex-mill", "ex mill", "exmill"])
     qty_col = detect_column(df, ["qty", "qty (m)"])
-
+    
     if not article_col or not exmill_col or not qty_col:
         raise ValueError(f"Could not detect required columns. Found: {list(df.columns)}")
 
-    # Convert EX-mill to datetime
+    # Parse EX-mill to datetime
     df[exmill_col] = pd.to_datetime(df[exmill_col], errors="coerce")
-
-    # Drop rows without valid EX-mill or Article
+    # Drop rows without EX-mill or Article
     df = df.dropna(subset=[exmill_col, article_col])
     if df.empty:
         return pd.DataFrame()
 
-    # Create Month label (e.g., Oct-25)
-    df["Month"] = df[exmill_col].dt.strftime("%b-%y")
-
-    # Convert Qty to numeric
+    # Normalize quantity
     df[qty_col] = pd.to_numeric(df[qty_col].astype(str).str.replace(",", "").str.strip(), errors="coerce").fillna(0)
 
-    # Metadata columns
+    # Create Month column from EX-mill date
+    df["Month"] = df[exmill_col].dt.strftime("%b-%y")  # e.g., Oct-25
+
+    # Determine metadata columns (all except Qty, EX-mill, Month)
     meta_cols = [c for c in df.columns if c not in [qty_col, exmill_col, "Month"]]
     if not meta_cols:
         meta_cols = [article_col]
 
-    # Group and pivot
+    # Group by metadata + Month, sum Qty
     grouped = df.groupby(meta_cols + ["Month"], dropna=False, as_index=False)[qty_col].sum()
-    pivot_df = grouped.pivot_table(index=meta_cols, columns="Month", values=qty_col, fill_value=0).reset_index()
+
+    # Pivot Month into columns
+    pivot_df = grouped.pivot_table(
+        index=meta_cols,
+        columns="Month",
+        values=qty_col,
+        fill_value=0
+    ).reset_index()
 
     # Sort month columns chronologically
     month_cols = [c for c in pivot_df.columns if c not in meta_cols]
@@ -102,7 +115,7 @@ def render():
                 df = pd.read_csv(uploaded)
             else:
                 df = pd.read_excel(uploaded, header=0)
-                # If first row is blank
+                # If first row is blank (all Unnamed), skip it
                 if df.columns.str.contains("Unnamed").all():
                     df = pd.read_excel(uploaded, header=1)
 
@@ -112,7 +125,7 @@ def render():
             transformed_df = transform_vspink_brief(df)
 
             if transformed_df.empty:
-                st.warning("No valid rows found after parsing EX-mill dates or Article values.")
+                st.warning("No valid rows after parsing EX-mill dates or Article values.")
                 return
 
             st.subheader("✅ Transformed Output")
