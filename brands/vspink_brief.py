@@ -16,24 +16,20 @@ def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     return output
 
 def clean_columns(df):
-    """Remove hidden characters, line breaks, normalize column names."""
+    """Clean hidden spaces and normalize column names"""
     cleaned = {}
     for c in df.columns:
-        new_c = str(c).strip().replace("\n", " ").replace("\r", " ").replace("\xa0", " ")
+        new_c = str(c).strip().replace("\xa0", " ").replace("\n", " ").replace("\r", " ")
         cleaned[c] = new_c
     df.rename(columns=cleaned, inplace=True)
     return df
 
 def detect_column(df, keywords):
     """Detect column by keywords (case-insensitive)."""
-    col_lower = {c.lower(): c for c in df.columns}
-    for kw in keywords:
-        if kw.lower() in col_lower:
-            return col_lower[kw.lower()]
-    # fallback: first column containing the keyword
     for c in df.columns:
+        low = str(c).lower()
         for kw in keywords:
-            if kw.lower() in str(c).lower():
+            if kw.lower() in low:
                 return c
     return None
 
@@ -60,7 +56,7 @@ def transform_vspink_brief(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
-    # Create Month label
+    # Create Month label (e.g., Oct-25)
     df["Month"] = df[exmill_col].dt.strftime("%b-%y")
 
     # Convert Qty to numeric
@@ -93,15 +89,20 @@ def transform_vspink_brief(df: pd.DataFrame) -> pd.DataFrame:
 def render():
     st.header("VSPink Brief — Buy Sheet → MCU Format")
 
-    uploaded = st.file_uploader("Upload VSPink Brief Buy Sheet", type=["xlsx", "xls", "csv"], key="vspink_brief_file")
+    uploaded = st.file_uploader(
+        "Upload VSPink Brief Buy Sheet",
+        type=["xlsx", "xls", "csv"],
+        key="vspink_brief_file"
+    )
 
     if uploaded:
         try:
+            # Load CSV or Excel
             if str(uploaded).lower().endswith(".csv") or uploaded.type == "text/csv":
                 df = pd.read_csv(uploaded)
             else:
-                # Try header at row 0, then row 1 if first row is blank
                 df = pd.read_excel(uploaded, header=0)
+                # If first row is blank
                 if df.columns.str.contains("Unnamed").all():
                     df = pd.read_excel(uploaded, header=1)
 
