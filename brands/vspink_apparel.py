@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-name = "VSPink Apparell - Bucket 03"
+name = "VSPink Apparel - Bucket 03"
 
 # ----------------------------
 # Helpers
@@ -117,7 +117,7 @@ def transform_vspink_apparel(file) -> pd.DataFrame:
 # Streamlit UI
 # ----------------------------
 def render():
-    st.header("VSPink Apparel — Buy Sheet → MCU (EX-mill based)")
+    st.header("VSPink Apparell — Buy Sheet → MCU (EX-mill based)")
 
     uploaded = st.file_uploader(
         "Upload VSPink Apparel Buy Sheet",
@@ -142,4 +142,5 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
+
 
