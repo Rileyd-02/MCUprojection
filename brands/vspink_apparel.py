@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-name = "VSPink Apparel - Bucket 03"
+name = "VSPink Apparell - Bucket 03"
 
 # ----------------------------
 # Helpers
@@ -142,3 +142,4 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
+
