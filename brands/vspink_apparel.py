@@ -3,92 +3,68 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
+# Display name in sidebar
 name = "VSPink Apparel - Bucket 03"
 
 # ----------------------------
-# Helpers
+# Helper utilities
 # ----------------------------
-def excel_to_bytes(df: pd.DataFrame, sheet_name="MCU"):
+def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
     output.seek(0)
     return output
 
-
 def clean_columns(df):
-    df.columns = (
-        df.columns.astype(str)
-        .str.replace("\xa0", " ", regex=False)
-        .str.replace("–", "-", regex=False)
-        .str.replace("—", "-", regex=False)
-        .str.strip()
-    )
+    cleaned = {}
+    for c in df.columns:
+        cleaned[c] = (
+            str(c)
+            .replace("\xa0", " ")
+            .replace("–", "-")
+            .replace("—", "-")
+            .strip()
+        )
+    df.rename(columns=cleaned, inplace=True)
     return df
-
 
 # ----------------------------
 # Transformation
 # ----------------------------
 def transform_vspink_apparel(file) -> pd.DataFrame:
-    """
-    EX-mill month only
-    NO back calculation
+    """Transform VSPink Apparel Buy Sheet → MCU Format
+       (NO back calculation — EX-mill month only)
     """
 
-    # ✅ Header is THIRD row (index=2)
-    df = pd.read_excel(file, header=2)
+    # Header is on second row
+    df = pd.read_excel(file, header=1)
 
     df = clean_columns(df)
 
     required_cols = [
-        "Customer",
-        "Supplier",
-        "Supplier COO",
-        "Program",
-        "Article",
-        "Qty (m)",
-        "EX-mill",
+        "Customer", "Supplier", "Supplier COO",
+        "Program", "Article", "Qty (m)", "EX-mill"
     ]
 
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        raise ValueError(
-            f"❌ Missing required column(s): {missing}\nDetected: {list(df.columns)}"
-        )
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(
+                f"❌ Required column missing: {col}. Columns detected: {list(df.columns)}"
+            )
 
-    # ----------------------------
-    # STRICT EX-MILL PARSING
-    # ----------------------------
-    df["EX-mill"] = pd.to_datetime(
-        df["EX-mill"],
-        errors="coerce",
-        dayfirst=False   # IMPORTANT: keeps Feb as Feb
-    )
-
-    df["Qty (m)"] = (
-        df["Qty (m)"]
-        .astype(str)
-        .str.replace(",", "", regex=False)
-        .str.strip()
-    )
-    df["Qty (m)"] = pd.to_numeric(df["Qty (m)"], errors="coerce")
-
-    # Drop invalid rows
-    df = df.dropna(subset=["EX-mill", "Qty (m)", "Article"])
-    df = df[df["Qty (m)"] != 0]
+    # Parse EX-mill date
+    df["EX-mill"] = pd.to_datetime(df["EX-mill"], errors="coerce")
+    df = df.dropna(subset=["EX-mill", "Article"])
 
     if df.empty:
-        raise ValueError("❌ No valid rows after EX-mill parsing.")
+        raise ValueError("❌ No valid rows found after EX-mill + Article filtering.")
 
-    # ----------------------------
-    # 🔒 MCU Month = EX-mill month ONLY
-    # ----------------------------
+    # 🔥 NO BACK CALCULATION
+    # MCU Month = EX-mill month
     df["MCU Month"] = df["EX-mill"].dt.strftime("%b-%y")
 
-    # ----------------------------
     # Pivot
-    # ----------------------------
     pivot_df = df.pivot_table(
         index=["Customer", "Supplier", "Supplier COO", "Program", "Article"],
         columns="MCU Month",
@@ -98,30 +74,19 @@ def transform_vspink_apparel(file) -> pd.DataFrame:
     ).reset_index()
 
     pivot_df.columns.name = None
-
-    # Sort months chronologically
-    month_cols = [c for c in pivot_df.columns if c not in pivot_df.columns[:5]]
-    if month_cols:
-        ordered = sorted(
-            month_cols,
-            key=lambda x: pd.to_datetime(x, format="%b-%y")
-        )
-        pivot_df = pivot_df[
-            list(pivot_df.columns[:5]) + ordered
-        ]
+    pivot_df.columns = [str(c) for c in pivot_df.columns]
 
     return pivot_df
 
-
 # ----------------------------
-# Streamlit UI
+# Streamlit Page
 # ----------------------------
 def render():
-    st.header("VSPink Apparell — Buy Sheet → MCU (EX-mill based)")
+    st.header("VSPink Apparel — Buy Sheet → MCU Format")
 
     uploaded = st.file_uploader(
         "Upload VSPink Apparel Buy Sheet",
-        type=["xlsx", "xls"],
+        type=["xlsx", "xls", "csv"],
         key="vspink_apparel_file"
     )
 
@@ -129,18 +94,16 @@ def render():
         try:
             df_out = transform_vspink_apparel(uploaded)
 
-            st.subheader("📄 MCU Preview")
+            st.subheader("📄 Preview Transformed MCU")
             st.dataframe(df_out.head())
 
-            out = excel_to_bytes(df_out)
+            out_bytes = excel_to_bytes(df_out, sheet_name="MCU")
             st.download_button(
                 "📥 Download MCU - VSPink Apparel.xlsx",
-                data=out,
+                data=out_bytes,
                 file_name="MCU_VSPink_Apparel.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
         except Exception as e:
-            st.error(f"❌ Error: {e}")
-
-
+            st.error(f"❌ Error processing VSPink Apparel file: {e}")
