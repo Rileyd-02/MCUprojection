@@ -37,7 +37,7 @@ def transform_ndc(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = df.columns.str.strip()
 
     supplier_col = "Supplier"
-    country_col = "Supplier Country"
+    country_col = "Supplier Country","Supplier COO"
 
     if supplier_col not in df.columns or country_col not in df.columns:
         raise ValueError("Missing required columns: Supplier / Supplier Country")
@@ -163,3 +163,4 @@ def render():
 
         except Exception as e:
             st.error(f"❌ Error processing file: {e}")
+
