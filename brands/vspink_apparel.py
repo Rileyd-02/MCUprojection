@@ -2,7 +2,6 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-from dateutil.relativedelta import relativedelta
 
 # Display name in sidebar
 name = "VSPink Apparel - Bucket 03"
@@ -11,7 +10,6 @@ name = "VSPink Apparel - Bucket 03"
 # Helper utilities
 # ----------------------------
 def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
-    """Convert DataFrame to downloadable Excel bytes."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
@@ -19,17 +17,15 @@ def excel_to_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1"):
     return output
 
 def clean_columns(df):
-    """Fix hidden spaces and normalize column names"""
     cleaned = {}
     for c in df.columns:
-        new_c = (
+        cleaned[c] = (
             str(c)
             .replace("\xa0", " ")
             .replace("–", "-")
             .replace("—", "-")
             .strip()
         )
-        cleaned[c] = new_c
     df.rename(columns=cleaned, inplace=True)
     return df
 
@@ -37,41 +33,39 @@ def clean_columns(df):
 # Transformation
 # ----------------------------
 def transform_vspink_apparel(file) -> pd.DataFrame:
-    """Transform VSPink Apparel Buy Sheet → MCU Format"""
+    """Transform VSPink Apparel Buy Sheet → MCU Format
+       (NO back calculation — EX-mill month only)
+    """
 
-    # Read Excel using the correct header row (second row, index=1)
+    # Header is on second row
     df = pd.read_excel(file, header=1)
 
-    # Clean column names
     df = clean_columns(df)
 
-    # Detect required columns
-    required_cols = ["Customer", "Supplier", "Supplier COO", "Program", "Article", "Qty (m)", "EX-mill"]
+    required_cols = [
+        "Customer", "Supplier", "Supplier COO",
+        "Program", "Article", "Qty (m)", "EX-mill"
+    ]
+
     for col in required_cols:
         if col not in df.columns:
-            raise ValueError(f"❌ Required column missing: {col}. Columns detected: {list(df.columns)}")
+            raise ValueError(
+                f"❌ Required column missing: {col}. Columns detected: {list(df.columns)}"
+            )
 
-    # Parse EX-mill dates
+    # Parse EX-mill date
     df["EX-mill"] = pd.to_datetime(df["EX-mill"], errors="coerce")
     df = df.dropna(subset=["EX-mill", "Article"])
+
     if df.empty:
         raise ValueError("❌ No valid rows found after EX-mill + Article filtering.")
 
-    # Determine sourcing type
-    df["Sourcing Type"] = df["Supplier COO"].apply(lambda x: "LOCAL" if str(x).strip().upper() == "SL" else "FOREIGN")
+    # 🔥 NO BACK CALCULATION
+    # MCU Month = EX-mill month
+    df["MCU Month"] = df["EX-mill"].dt.strftime("%b-%y")
 
-    # Back-calc MCU Month
-    def compute_mcu_date(row):
-        return row["EX-mill"] - relativedelta(months=3 if row["Sourcing Type"] == "LOCAL" else 4)
-
-    df["MCU Month"] = df.apply(compute_mcu_date, axis=1)
-    df["MCU Month"] = df["MCU Month"].dt.strftime("%b-%y")  # e.g., Aug-25
-
-    # Prepare final MCU output
-    final_df = df[["Customer", "Supplier", "Supplier COO", "Program", "Article", "Qty (m)", "EX-mill", "MCU Month"]]
-
-    # Pivot to get one row per style and month columns as quantities
-    pivot_df = final_df.pivot_table(
+    # Pivot
+    pivot_df = df.pivot_table(
         index=["Customer", "Supplier", "Supplier COO", "Program", "Article"],
         columns="MCU Month",
         values="Qty (m)",
@@ -79,7 +73,6 @@ def transform_vspink_apparel(file) -> pd.DataFrame:
         fill_value=0
     ).reset_index()
 
-    # Flatten pivoted columns
     pivot_df.columns.name = None
     pivot_df.columns = [str(c) for c in pivot_df.columns]
 
@@ -100,16 +93,13 @@ def render():
     if uploaded:
         try:
             df_out = transform_vspink_apparel(uploaded)
-            if df_out.empty:
-                st.warning("No valid rows found after transformation.")
-                return
 
             st.subheader("📄 Preview Transformed MCU")
             st.dataframe(df_out.head())
 
             out_bytes = excel_to_bytes(df_out, sheet_name="MCU")
             st.download_button(
-                label="📥 Download MCU - VSPink Apparel.xlsx",
+                "📥 Download MCU - VSPink Apparel.xlsx",
                 data=out_bytes,
                 file_name="MCU_VSPink_Apparel.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
