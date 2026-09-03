@@ -1,15 +1,24 @@
+# ============================================================
+# brands/vs_bra.py
+# ============================================================
+
 import streamlit as st
 import pandas as pd
 from io import BytesIO
 
+
+# ============================================================
+# PAGE NAME
+# ============================================================
+
 name = "VS Bra - Bucket 01"
 
-# HELPER - GENERATE EXCEL
 
-def excel_to_bytes(df: pd.DataFrame, sheet_name="Sheet1"):
-    """
-    Convert a dataframe into an Excel file in memory.
-    """
+# ============================================================
+# EXCEL OUTPUT
+# ============================================================
+
+def excel_to_bytes(df: pd.DataFrame, sheet_name="MCU"):
 
     buffer = BytesIO()
 
@@ -28,61 +37,59 @@ def excel_to_bytes(df: pd.DataFrame, sheet_name="Sheet1"):
 
     return buffer
 
-# CLEAN COLUMN NAMES
-def clean_columns(df):
-    """
-    Clean Excel column names.
 
-    Handles:
-    - Non-breaking spaces
-    - En dash
-    - Em dash
-    - Leading/trailing spaces
-    - Multiple spaces
-    """
+# ============================================================
+# CLEAN COLUMN NAMES
+# ============================================================
+
+def clean_columns(df):
 
     df = df.copy()
 
-    new_cols = {}
+    cleaned_columns = []
 
-    for c in df.columns:
+    for column in df.columns:
 
-        cleaned = (
-            str(c)
+        column = str(column)
+
+        column = (
+            column
             .replace("\xa0", " ")
+            .replace("\u200b", "")
             .replace("–", "-")
             .replace("—", "-")
             .strip()
         )
 
-        # Convert multiple spaces to one
-        cleaned = " ".join(cleaned.split())
+        # Remove duplicate spaces
+        column = " ".join(column.split())
 
-        new_cols[c] = cleaned
+        cleaned_columns.append(column)
 
-    df.rename(
-        columns=new_cols,
-        inplace=True
-    )
+    df.columns = cleaned_columns
 
     return df
-# CLEAN CELL VALUES
-def clean_cell_values(df):
-    """
-    Clean text values inside the dataframe.
 
-    This is important because Excel may contain invisible
-    characters or non-breaking spaces inside cells.
-    """
+
+# ============================================================
+# CLEAN CELL VALUES
+# ============================================================
+
+def clean_cell_values(df):
 
     df = df.copy()
 
-    for col in df.columns:
+    for column in df.columns:
 
-        if df[col].dtype == "object":
+        # Only clean text/object columns
+        if (
+            df[column].dtype == "object"
+            or pd.api.types.is_string_dtype(df[column])
+        ):
 
-            df[col] = (
-                df[col]
+            df[column] = (
+                df[column]
+                .fillna("")
                 .astype(str)
                 .str.replace(
                     "\xa0",
@@ -97,9 +104,8 @@ def clean_cell_values(df):
                 .str.strip()
             )
 
-            # Convert string representations of missing values
-            # back to blank strings
-            df[col] = df[col].replace(
+            # Convert fake missing values to blank
+            df[column] = df[column].replace(
                 {
                     "nan": "",
                     "NaN": "",
@@ -109,18 +115,13 @@ def clean_cell_values(df):
             )
 
     return df
-# DATE PARSING
+
+
+# ============================================================
+# PARSE DATE
+# ============================================================
 
 def parse_exmill_date(series):
-    """
-    Robustly parse REQ. Ex-mill Date.
-
-    Supports:
-    - Excel datetime values
-    - Standard dates
-    - MM/DD/YYYY
-    - Mixed date formats
-    """
 
     # First attempt
     parsed = pd.to_datetime(
@@ -129,10 +130,7 @@ def parse_exmill_date(series):
     )
 
     # Retry failed values using mixed format
-    failed = (
-        parsed.isna()
-        & series.notna()
-    )
+    failed = parsed.isna()
 
     if failed.any():
 
@@ -151,12 +149,37 @@ def parse_exmill_date(series):
 
     return parsed
 
-# TRANSFORMATION LOGIC
+
+# ============================================================
+# TRANSFORM VS BRA
+# ============================================================
+
 def transform_vs_bra(df):
 
+    # ========================================================
+    # 1. COPY
+    # ========================================================
+
     df = df.copy()
+
+
+    # ========================================================
+    # 2. CLEAN COLUMN NAMES
+    # ========================================================
+
     df = clean_columns(df)
+
+
+    # ========================================================
+    # 3. CLEAN CELL VALUES
+    # ========================================================
+
     df = clean_cell_values(df)
+
+
+    # ========================================================
+    # 4. REQUIRED COLUMNS
+    # ========================================================
 
     REQUIRED = [
         "Vendor",
@@ -174,58 +197,90 @@ def transform_vs_bra(df):
         "Requirement (M)"
     ]
 
-    missing = [
-        col
-        for col in REQUIRED
-        if col not in df.columns
+
+    # ========================================================
+    # 5. VALIDATE REQUIRED COLUMNS
+    # ========================================================
+
+    missing_columns = [
+        column
+        for column in REQUIRED
+        if column not in df.columns
     ]
 
-    if missing:
+    if missing_columns:
 
         raise ValueError(
-            "❌ Missing required column(s): "
-            + ", ".join(missing)
-            + "\n\n"
-            + "Columns detected in the uploaded file:\n"
+            "❌ Missing required column(s):\n\n"
+            + "\n".join(
+                f"- {column}"
+                for column in missing_columns
+            )
+            + "\n\nDetected columns:\n"
             + ", ".join(
-                map(str, df.columns)
+                str(column)
+                for column in df.columns
             )
         )
+
+
+    # ========================================================
+    # 6. CHECK INPUT DATA
+    # ========================================================
 
     if df.empty:
 
         raise ValueError(
-            "❌ The uploaded Excel file contains no data rows."
+            "❌ The uploaded Excel file contains no data."
         )
+
+
+    # ========================================================
+    # 7. SAVE ORIGINAL DATE VALUES
+    # ========================================================
 
     original_dates = (
         df["REQ. Ex-mill Date"]
         .copy()
     )
 
+
+    # ========================================================
+    # 8. PARSE EX-MILL DATE
+    # ========================================================
+
     df["REQ. Ex-mill Date"] = parse_exmill_date(
         df["REQ. Ex-mill Date"]
     )
+
+
+    # ========================================================
+    # 9. IDENTIFY INVALID DATES
+    # ========================================================
 
     invalid_dates = (
         df["REQ. Ex-mill Date"]
         .isna()
     )
+
+
+    # ========================================================
+    # 10. SHOW INVALID DATES
+    # ========================================================
+
     if invalid_dates.any():
 
-        invalid_count = int(
-            invalid_dates.sum()
-        )
-
         invalid_values = (
-            original_dates[invalid_dates]
+            original_dates[
+                invalid_dates
+            ]
             .astype(str)
             .tolist()
         )
 
         st.warning(
-            f"⚠️ {invalid_count} row(s) have an invalid "
-            f"'REQ. Ex-mill Date' and will be excluded."
+            f"⚠️ {int(invalid_dates.sum())} row(s) "
+            "have an invalid REQ. Ex-mill Date."
         )
 
         with st.expander(
@@ -236,18 +291,31 @@ def transform_vs_bra(df):
                 invalid_values
             )
 
+
+    # ========================================================
+    # 11. REMOVE INVALID DATE ROWS
+    # ========================================================
+
     df = df.loc[
         ~invalid_dates
     ].copy()
 
+
+    # ========================================================
+    # 12. CHECK DATA AFTER DATE FILTER
+    # ========================================================
+
     if df.empty:
 
         raise ValueError(
-            "❌ No valid rows remain after processing "
-            "'REQ. Ex-mill Date'.\n\n"
-            "Please check the date values in the uploaded "
-            "Excel file."
+            "❌ All rows were removed because "
+            "REQ. Ex-mill Date could not be parsed."
         )
+
+
+    # ========================================================
+    # 13. CREATE MCU MONTH
+    # ========================================================
 
     df["MCU Month"] = (
         df["REQ. Ex-mill Date"]
@@ -255,24 +323,41 @@ def transform_vs_bra(df):
     )
 
 
+    # ========================================================
+    # 14. CLEAN MCU MONTH
+    # ========================================================
+
+    df["MCU Month"] = (
+        df["MCU Month"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+
+    # ========================================================
+    # 15. CHECK MCU MONTH
+    # ========================================================
+
     if (
         df["MCU Month"]
-        .isna()
+        .eq("")
         .all()
     ):
 
         raise ValueError(
-            "❌ Unable to create MCU Month from "
-            "'REQ. Ex-mill Date'."
+            "❌ No valid MCU Month could be generated "
+            "from REQ. Ex-mill Date."
         )
 
 
-    # --------------------------------------------------------
-    # 15. Clean Requirement (M)
-    # --------------------------------------------------------
+    # ========================================================
+    # 16. CLEAN REQUIREMENT (M)
+    # ========================================================
 
     df["Requirement (M)"] = (
         df["Requirement (M)"]
+        .fillna("")
         .astype(str)
         .str.replace(
             "\xa0",
@@ -288,24 +373,14 @@ def transform_vs_bra(df):
     )
 
 
-    # --------------------------------------------------------
-    # 16. Convert Requirement (M) to numeric
-    # --------------------------------------------------------
+    # ========================================================
+    # 17. CONVERT REQUIREMENT TO NUMBER
+    # ========================================================
 
     df["Requirement (M)"] = pd.to_numeric(
         df["Requirement (M)"],
         errors="coerce"
-    )
-
-
-    # --------------------------------------------------------
-    # 17. Replace invalid quantities with 0
-    # --------------------------------------------------------
-
-    df["Requirement (M)"] = (
-        df["Requirement (M)"]
-        .fillna(0)
-    )
+    ).fillna(0)
 
 
     # ========================================================
@@ -328,44 +403,33 @@ def transform_vs_bra(df):
 
 
     # ========================================================
-    # 19. IMPORTANT FIX FOR BLANK VALUES
-    # ========================================================
-    #
-    # Your second Excel has:
-    #
-    # BS
-    # -
-    # -
-    # -
-    #
-    # Pandas pivot_table can drop rows where an index field
-    # is NaN.
-    #
-    # Therefore we explicitly convert missing identity values
-    # into blank strings.
-    #
+    # 19. CLEAN IDENTITY COLUMNS
     # ========================================================
 
-    for col in identity_cols:
+    for column in identity_cols:
 
-        # Convert missing values to blank
-        df[col] = df[col].fillna("")
+        # Fill blanks
+        df[column] = df[column].fillna("")
 
-        # Convert everything to string so that values such as
-        # Dept Code, Style, etc. remain consistent
-        df[col] = (
-            df[col]
+        # Convert to string
+        df[column] = (
+            df[column]
             .astype(str)
             .str.replace(
                 "\xa0",
                 " ",
                 regex=False
             )
+            .str.replace(
+                "\u200b",
+                "",
+                regex=False
+            )
             .str.strip()
         )
 
-        # Clean literal missing values
-        df[col] = df[col].replace(
+        # Remove fake missing values
+        df[column] = df[column].replace(
             {
                 "nan": "",
                 "NaN": "",
@@ -384,158 +448,219 @@ def transform_vs_bra(df):
     ):
 
         st.write(
-            "**Rows before pivot:**",
+            "**Rows after cleaning:**",
             len(df)
         )
 
         st.write(
-            "**MCU Month values:**",
+            "**MCU Months:**",
             df["MCU Month"]
             .unique()
             .tolist()
         )
 
         st.write(
-            "**Requirement (M) values:**",
+            "**Requirement (M):**",
             df["Requirement (M)"]
             .tolist()
         )
 
         st.write(
-            "**Blank BS rows:**",
-            int(
-                (
-                    df["BS"]
-                    .astype(str)
-                    .str.strip()
-                    == ""
-                ).sum()
-            )
+            "**BS values:**",
+            df["BS"]
+            .unique()
+            .tolist()
         )
 
         st.write(
-            "**Data before pivot:**"
+            "**Data before transformation:**"
         )
 
         st.dataframe(
-            df.head(20),
+            df.head(50),
             use_container_width=True
         )
 
 
     # ========================================================
-    # 21. PIVOT MCU MONTHS
+    # 21. GROUP DATA
+    # ========================================================
+    #
+    # IMPORTANT:
+    #
+    # We intentionally use groupby + unstack instead of
+    # pivot_table.
+    #
+    # This avoids the problem where pivot_table can remove
+    # rows because an identity field is blank.
+    #
+    # dropna=False ensures blank identity values are retained.
+    #
     # ========================================================
 
-    pivot_df = df.pivot_table(
-        index=identity_cols,
-        columns="MCU Month",
-        values="Requirement (M)",
-        aggfunc="sum",
-        fill_value=0,
-
-        # VERY IMPORTANT
-        # Keep rows even when an identity field is blank
-        dropna=False
-    ).reset_index()
+    grouped = (
+        df
+        .groupby(
+            identity_cols + ["MCU Month"],
+            dropna=False,
+            as_index=False
+        )["Requirement (M)"]
+        .sum()
+    )
 
 
     # ========================================================
-    # 22. Remove pivot column name
+    # 22. CHECK GROUPED DATA
+    # ========================================================
+
+    if grouped.empty:
+
+        raise ValueError(
+            "❌ No data remains after grouping."
+        )
+
+
+    # ========================================================
+    # 23. CREATE MCU MONTH COLUMNS
+    # ========================================================
+
+    pivot_df = (
+        grouped
+        .set_index(
+            identity_cols + ["MCU Month"]
+        )["Requirement (M)"]
+        .unstack(
+            "MCU Month",
+            fill_value=0
+        )
+        .reset_index()
+    )
+
+
+    # ========================================================
+    # 24. REMOVE INDEX NAME
     # ========================================================
 
     pivot_df.columns.name = None
 
 
     # ========================================================
-    # 23. Identify month columns
+    # 25. IDENTIFY MONTH COLUMNS
     # ========================================================
 
     month_cols = [
-        c
-        for c in pivot_df.columns
-        if c not in identity_cols
+        column
+        for column in pivot_df.columns
+        if column not in identity_cols
     ]
 
 
     # ========================================================
-    # 24. Sort MCU months chronologically
+    # 26. CHECK MONTH COLUMNS
     # ========================================================
 
-    if month_cols:
+    if not month_cols:
 
-        parsed_months = pd.to_datetime(
-            month_cols,
+        raise ValueError(
+            "❌ No MCU month columns were created."
+        )
+
+
+    # ========================================================
+    # 27. SORT MONTHS
+    # ========================================================
+    #
+    # This version does NOT use month_pairs.sort().
+    #
+    # It converts the month names to dates and sorts them
+    # safely.
+    #
+    # ========================================================
+
+    month_dates = {}
+
+    for month in month_cols:
+
+        parsed_month = pd.to_datetime(
+            str(month),
             format="%b-%y",
             errors="coerce"
         )
 
-        month_pairs = list(
-            zip(
-                parsed_months,
-                month_cols
-            )
-        )
+        if not pd.isna(parsed_month):
 
-        # Keep only successfully parsed months
-        month_pairs = [
-            pair
-            for pair in month_pairs
-            if not pd.isna(pair[0])
-        ]
-
-        # Sort chronologically
-        month_pairs.sort(
-            key=lambda x: x[0]
-        )
-
-        ordered_months = [
-            month
-            for _, month in month_pairs
-        ]
-
-        pivot_df = pivot_df[
-            identity_cols + ordered_months
-        ]
+            month_dates[month] = parsed_month
 
 
     # ========================================================
-    # 25. Final validation
+    # 28. SORT VALID MONTHS
+    # ========================================================
+
+    ordered_months = [
+        month
+        for month, _ in sorted(
+            month_dates.items(),
+            key=lambda item: item[1]
+        )
+    ]
+
+
+    # ========================================================
+    # 29. HANDLE UNPARSED MONTHS
+    # ========================================================
+
+    unparsed_months = [
+        month
+        for month in month_cols
+        if month not in month_dates
+    ]
+
+    ordered_months.extend(
+        unparsed_months
+    )
+
+
+    # ========================================================
+    # 30. FINAL COLUMN ORDER
+    # ========================================================
+
+    pivot_df = pivot_df[
+        identity_cols + ordered_months
+    ]
+
+
+    # ========================================================
+    # 31. FINAL CHECK
     # ========================================================
 
     if pivot_df.empty:
 
         raise ValueError(
-            "❌ Pivot produced an empty output.\n\n"
-            "Please check the uploaded data."
+            "❌ Pivot produced an empty output."
         )
 
 
     # ========================================================
-    # 26. Return transformed dataframe
+    # 32. RETURN
     # ========================================================
 
     return pivot_df
 
 
 # ============================================================
-# STREAMLIT PAGE RENDERING
+# STREAMLIT RENDER
 # ============================================================
 
 def render():
-
-    # --------------------------------------------------------
-    # Header
-    # --------------------------------------------------------
 
     st.header(
         "VS Bra — Buy Sheet → MCU Format"
     )
 
 
-    # --------------------------------------------------------
-    # File uploader
-    # --------------------------------------------------------
+    # ========================================================
+    # FILE UPLOADER
+    # ========================================================
 
     file = st.file_uploader(
         "Upload VS Bra Buy Sheet",
@@ -548,9 +673,9 @@ def render():
     )
 
 
-    # --------------------------------------------------------
-    # Process uploaded file
-    # --------------------------------------------------------
+    # ========================================================
+    # PROCESS FILE
+    # ========================================================
 
     if file:
 
@@ -574,7 +699,7 @@ def render():
 
 
             # =================================================
-            # INPUT VALIDATION
+            # CHECK FILE
             # =================================================
 
             if df.empty:
@@ -601,25 +726,25 @@ def render():
 
 
             # =================================================
-            # FILE DEBUG INFORMATION
+            # FILE INFORMATION
             # =================================================
 
             with st.expander(
-                "🔍 File Debug Information"
+                "📋 File Information"
             ):
 
                 st.write(
-                    "**File name:**",
+                    "**File:**",
                     file.name
                 )
 
                 st.write(
-                    "**Input rows:**",
+                    "**Rows:**",
                     len(df)
                 )
 
                 st.write(
-                    "**Input columns:**",
+                    "**Columns:**",
                     len(df.columns)
                 )
 
@@ -632,71 +757,8 @@ def render():
                 )
 
 
-                # ---------------------------------------------
-                # Show date values
-                # ---------------------------------------------
-
-                if (
-                    "REQ. Ex-mill Date"
-                    in df.columns
-                ):
-
-                    st.write(
-                        "**REQ. Ex-mill Date values:**"
-                    )
-
-                    st.write(
-                        df[
-                            "REQ. Ex-mill Date"
-                        ]
-                        .head(20)
-                        .tolist()
-                    )
-
-
-                # ---------------------------------------------
-                # Show Requirement values
-                # ---------------------------------------------
-
-                if (
-                    "Requirement (M)"
-                    in df.columns
-                ):
-
-                    st.write(
-                        "**Requirement (M) values:**"
-                    )
-
-                    st.write(
-                        df[
-                            "Requirement (M)"
-                        ]
-                        .head(20)
-                        .tolist()
-                    )
-
-
-                # ---------------------------------------------
-                # Show BS values
-                # ---------------------------------------------
-
-                if "BS" in df.columns:
-
-                    st.write(
-                        "**BS values:**"
-                    )
-
-                    st.write(
-                        df[
-                            "BS"
-                        ]
-                        .head(20)
-                        .tolist()
-                    )
-
-
             # =================================================
-            # TRANSFORM DATA
+            # TRANSFORM
             # =================================================
 
             transformed = transform_vs_bra(
@@ -719,7 +781,7 @@ def render():
 
 
             # =================================================
-            # OUTPUT STATISTICS
+            # SUCCESS MESSAGE
             # =================================================
 
             st.success(
@@ -730,22 +792,22 @@ def render():
 
 
             # =================================================
-            # GENERATE EXCEL
+            # CREATE EXCEL
             # =================================================
 
-            out = excel_to_bytes(
+            output_file = excel_to_bytes(
                 transformed,
                 sheet_name="MCU"
             )
 
 
             # =================================================
-            # DOWNLOAD BUTTON
+            # DOWNLOAD
             # =================================================
 
             st.download_button(
-                "📥 Download MCU - VS Bra.xlsx",
-                data=out,
+                label="📥 Download MCU - VS Bra.xlsx",
+                data=output_file,
                 file_name="MCU_VS_Bra.xlsx",
                 mime=(
                     "application/vnd.openxmlformats-officedocument."
@@ -756,7 +818,7 @@ def render():
 
         # =====================================================
         # ERROR HANDLING
-        # =================================================
+        # =====================================================
 
         except Exception as e:
 
